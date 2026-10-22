@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>저장 폴더 선택</title>
+<style>
+:root{color-scheme:dark;font:15px/1.55 system-ui,sans-serif;color:#e6f0f3;background:#111d22}*{box-sizing:border-box}body{margin:0;padding:22px}h1{font-size:22px;margin:0 0 6px}p{margin:8px 0}.muted{color:#aec0c7;font-size:13px}.scope{padding:12px;border:1px solid #3f5964;background:#192d35;border-radius:10px;margin:14px 0}.current{word-break:break-all;font-size:13px;color:#c3d4db}button,input{font:inherit}button{border:1px solid #506873;background:#21343d;color:inherit;border-radius:9px;padding:10px 13px;cursor:pointer}button:focus-visible,input:focus-visible{outline:3px solid #8fe0d3;outline-offset:2px}button:disabled{opacity:.45;cursor:not-allowed}.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.roots{display:grid;gap:8px;margin:12px 0}.root{text-align:left}.root small{display:block;font-size:11px;color:#b8cad1;word-break:break-all}.crumbs{display:flex;flex-wrap:wrap;gap:5px;margin:12px 0}.crumbs button{font-size:12px;padding:5px 8px}.list{display:grid;gap:7px;min-height:100px;margin:12px 0}.folder{text-align:left;padding:13px}.primary{background:#77d8c1;color:#09251f;font-weight:700;border-color:#77d8c1}.footer{position:sticky;bottom:-22px;margin:18px -22px -22px;padding:16px 22px;background:#111d2af5;border-top:1px solid #31444d;justify-content:space-between}.error{color:#ffc1b7;white-space:pre-wrap}.notice{color:#d3dfad}.hidden,[hidden]{display:none!important}input{min-width:0;flex:1;width:100%;background:#14272e;color:inherit;border:1px solid #536f7b;border-radius:8px;padding:10px}#folderName{margin-top:8px}#location{font-weight:600;word-break:break-all}details{margin-top:14px}summary{cursor:pointer}#busy{font-size:13px;color:#9ee3d4}#error:empty,#busy:empty,#notice:empty{display:none}
+</style></head><body>
+<h1>저장 폴더 선택</h1>
+<p class="muted">앱이 접근할 수 있는 폴더</p>
+<div class="scope muted">이 목록은 앱이 이미 접근할 수 있는 폴더만 보여 줍니다. Android 시스템 폴더 선택기가 아닙니다. 공유 저장소가 차단된 경우 시스템 권한 연동을 추가한 APK가 필요합니다.</div>
+<p class="muted">현재 저장 위치</p><p id="current" class="current">확인 중…</p>
+<div class="row"><button id="rootsButton" type="button">시작 위치</button><button id="back" type="button" disabled>← 상위 폴더</button><button id="refresh" type="button">새로고침</button></div>
+<div id="roots" class="roots"></div>
+<nav id="crumbs" class="crumbs" aria-label="폴더 경로"></nav>
+<p id="location">시작 위치를 선택하세요.</p>
+<p id="busy" role="status" aria-live="polite"></p><p id="error" class="error" role="alert"></p><p id="notice" class="notice"></p>
+<div id="list" class="list"></div>
+<details id="newFolder" hidden><summary>새 폴더 만들기</summary><div class="row"><input id="folderName" maxlength="120" placeholder="폴더 이름" aria-label="새 폴더 이름" autocomplete="off"><button id="mkdir" type="button">만들기</button></div><p class="muted">폴더를 만든 뒤 목록에서 열고 저장 위치로 선택하세요.</p></details>
+<div class="row footer"><button id="cancel" type="button">취소</button><button id="choose" class="primary" type="button" disabled>이 폴더에 저장</button></div>
+<script>
+(()=>{'use strict';
+ const params=new URLSearchParams(location.hash.slice(1));
+ const token=params.get('token')||'', request=params.get('request')||'', parentOrigin=params.get('parent')||'';
+ function isLoopbackOrigin(value){
+  try{
+   const parsed=new URL(value);
+   return parsed.protocol==='http:'&&(parsed.hostname==='127.0.0.1'||parsed.hostname==='localhost')&&parsed.origin===value;
+  }catch(_){return false;}
+ }
+ history.replaceState(null,'',location.pathname);
+ const el=id=>document.getElementById(id);
+ let roots=[], root=null, listing=null, sequence=0, working=false, committing=false, pending=null;
+ function tell(type,extra={}){if(parent!==window&&parentOrigin)parent.postMessage({type,request,...extra},parentOrigin);}
+ function error(message){el('error').textContent=message||'';}
+ function controls(){
+  for(const b of document.querySelectorAll('button'))b.disabled=working;
+  el('cancel').disabled=committing;
+  el('back').disabled=working||!listing||listing.parent_relative===null;
+  el('choose').disabled=working||!root||(!listing&&!root.creatable);
+  el('newFolder').hidden=!listing;
+  el('folderName').disabled=working;
+  el('choose').textContent=root?.creatable&&!listing?'기본 폴더 만들고 선택':'이 폴더에 저장';
+ }
+ async function api(path,body){
+  const response=await fetch(path,{method:body?'POST':'GET',credentials:'omit',cache:'no-store',headers:{'X-NAIA-Storage':token,...(body?{'Content-Type':'application/json'}:{})},...(body?{body:JSON.stringify(body)}:{})});
+  const data=await response.json();
+  if((!response.ok||!data.ok)&&!(path==='/state'&&Array.isArray(data.roots)))throw new Error(data.error?.message||'폴더 작업을 완료하지 못했습니다.');
+  return data;
+ }
+ function button(label,action,cls=''){const b=document.createElement('button');b.type='button';b.className=cls;b.textContent=label;b.onclick=action;return b;}
+ function renderRoots(){
+  el('roots').replaceChildren();
+  for(const item of roots){
+   const b=button(item.label,()=>openRoot(item),'root');
+   const small=document.createElement('small');small.textContent=item.path+(item.available?'':item.creatable?' · 선택하면 기본 폴더 생성':' · 접근 불가');b.append(small);
+   el('roots').append(b);
+  }
+ }
+ function showRoots(){
+  if(working)return;
+  ++sequence;root=null;listing=null;el('roots').hidden=false;el('crumbs').replaceChildren();el('list').replaceChildren();el('location').textContent='시작 위치를 선택하세요.';el('notice').textContent='';error('');controls();
+ }
+ function drawListing(){
+  el('roots').hidden=true;el('crumbs').replaceChildren();el('list').replaceChildren();
+  el('crumbs').append(button(root.label,()=>browse(root,'')));
+  const parts=(listing?.relative||'').split('/').filter(Boolean);
+  parts.forEach((part,index)=>el('crumbs').append(button(part,()=>browse(root,parts.slice(0,index+1).join('/')))));
+  el('location').textContent=root.path+(listing?.relative?'/'+listing.relative:'');
+  if(!listing){el('notice').textContent='기본 이미지 폴더가 아직 없습니다. 아래 선택 버튼을 누르면 이 폴더를 만들고 저장 위치로 적용합니다.';controls();return;}
+  for(const item of listing.directories)el('list').append(button('📁 '+item.name,()=>browse(root,item.relative),'folder'));
+  if(!listing.directories.length){const p=document.createElement('p');p.className='muted';p.textContent='하위 폴더가 없습니다.';el('list').append(p);}
+  el('notice').textContent=listing.truncated?'폴더가 많아 일부만 표시합니다.':!listing.can_select?'저장 가능 여부는 선택할 때 실제 쓰기로 확인합니다.':'';
+  controls();
+ }
+ async function browse(target,relative){
+  if(working)return;
+  const serial=++sequence;working=true;listing=null;root=target;error('');el('busy').textContent='폴더를 불러오는 중…';controls();
+  try{const result=await api('/list',{root_id:target.id,relative});if(serial!==sequence)return;listing=result;drawListing();}
+  catch(e){if(serial===sequence){listing=null;root=null;el('list').replaceChildren();el('crumbs').replaceChildren();el('roots').hidden=false;el('location').textContent='다른 시작 위치를 선택하세요.';error(e.message);}}
+  finally{if(serial===sequence){working=false;el('busy').textContent='';controls();}}
+ }
+ function openRoot(target){
+  if(working)return;
+  if(target.available){browse(target,'');return;}
+  if(target.creatable){root=target;listing=null;error('');drawListing();return;}
+  error('이 폴더는 앱에서 접근할 수 없습니다. Android 공유 저장소의 권한 연동은 APK 업데이트가 필요합니다.');
+ }
+ async function refresh(){
+  if(working)return;
+  const selected=root, relative=listing?.relative||'';
+  working=true;error('');el('busy').textContent='시작 위치를 확인하는 중…';controls();
+  try{const state=await api('/state');roots=state.roots||[];renderRoots();el('current').textContent=state.current_save_directory||state.current_base_path||'확인할 수 없음';if(!state.ok)error(state.error?.message);}
+  catch(e){error(e.message);}
+  finally{working=false;el('busy').textContent='';controls();}
+  if(selected){const updated=roots.find(r=>r.id===selected.id);if(updated?.available)browse(updated,relative);else if(updated)openRoot(updated);}
+ }
+ el('rootsButton').onclick=showRoots;
+ el('back').onclick=()=>{if(listing&&listing.parent_relative!==null)browse(root,listing.parent_relative);};
+ el('refresh').onclick=refresh;
+ el('cancel').onclick=()=>{if(!committing){++sequence;tell('naia-storage-cancel');}};
+ el('mkdir').onclick=async()=>{
+  if(working||!listing)return;
+  const name=el('folderName').value.trim();if(!name){error('새 폴더 이름을 입력해 주세요.');return;}
+  const target=root,relative=listing.relative;working=true;controls();error('');
+  try{await api('/mkdir',{root_id:target.id,relative,name});el('folderName').value='';working=false;await browse(target,relative);el('notice').textContent='폴더를 만들었습니다. 원하는 폴더를 열고 저장 버튼을 눌러 주세요.';}
+  catch(e){error(e.message);}finally{working=false;controls();}
+ };
+ el('choose').onclick=()=>{
+  if(working||!root||(!listing&&!root.creatable))return;
+  pending={root_id:root.id,relative:listing?.relative||''};working=true;committing=true;controls();error('');el('busy').textContent='쓰기 권한과 저장 설정을 확인하는 중…';
+  tell('naia-storage-commit');
+ };
+ window.addEventListener('message',async event=>{
+  if(event.source!==parent||event.origin!==parentOrigin||event.data?.request!==request||event.data.type!=='naia-storage-commit-ok'||!pending)return;
+  const choice=pending;pending=null;
+  try{const result=await api('/apply',choice);if(!result.applied||!result.state)throw new Error('저장 설정을 확인하지 못했습니다.');tell('naia-storage-applied',{state:result.state});}
+  catch(e){error(e.message);committing=false;working=false;el('busy').textContent='';tell('naia-storage-idle');controls();}
+ });
+ if(!token||!request||!isLoopbackOrigin(parentOrigin)||parent===window){error('NAIA 저장 설정에서 폴더 선택을 열어 주세요.');working=true;controls();return;}
+ refresh();
+})();
+</script></body></html>

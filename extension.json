@@ -1,8 +1,8 @@
 {
-  "id": "naia_android_string_compat_v1",
-  "name": "NAIA Android 문자열 호환성 패치",
-  "version": "1.0.0",
+  "id": "naia_storage_picker_v1",
+  "name": "NAIA 저장 폴더 선택",
+  "version": "0.1.0",
   "naia_ext_api": 1,
   "entry": "main.py",
-  "description": "Android의 일부 Arrow 문자열 커널 부재를 기존 pandas의 Python 문자열 처리로 보완합니다. 적용 해제는 확장을 끈 뒤 앱 백엔드를 완전히 다시 시작하세요."
+  "description": "저장경로를 직접 쓰는 대신 앱이 접근할 수 있는 폴더를 목록에서 선택합니다. 쓰기 확인 후 적용하며 기존 저장 옵션을 유지합니다. 갤럭시 기본 선택창이나 새 Android 권한 부여 기능은 포함하지 않습니다."
 }
