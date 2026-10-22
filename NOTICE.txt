@@ -1,6 +1,12 @@
-NAIA Android string compatibility extension 1.0.0
+NAIA ChatGPT Connect 0.1.0 preview
 
-For NAIA 2.0 v2.0.48 by DNT-LAB. Upstream: https://github.com/DNT-LAB/NAIA2.0
-Upstream commit: 6e97c7f4f37e495ad21657ed29d28dd9993a808e
-This compatibility work is distributed under GPL-3.0; see LICENSE.
-No upstream endorsement is implied.
+For NAIA 2.0 v2.0.48 by DNT-LAB.
+Upstream: https://github.com/DNT-LAB/NAIA2.0
+Audited upstream commit: 6e97c7f4f37e495ad21657ed29d28dd9993a808e
+
+This extension adapts upstream Assist output contracts and runtime interfaces.
+Distributed under GPL-3.0; see LICENSE.
+No endorsement by DNT-LAB or OpenAI is implied.
+
+Only runtime source, license and installation documentation are distributed.
+Credentials, diagnostics and development workspace data are not included.

@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="referrer" content="no-referrer"><title>ChatGPT 연결 · NAIA</title>
+<style>
+:root{color-scheme:dark;font-family:system-ui,-apple-system,sans-serif;color:#e7efec;background:#0f191c}*{box-sizing:border-box}body{margin:0;padding:24px;max-width:620px;margin-inline:auto}header small{font-size:11px;letter-spacing:.16em;color:#7ba99d}h1{font-size:29px;font-weight:650;letter-spacing:-.04em;margin:12px 0}p{color:#a8bcb6;line-height:1.65;font-size:14px}.card{border:1px solid #30433e;border-radius:15px;background:#152321;padding:19px;margin:20px 0}.row{display:flex;align-items:center;justify-content:space-between;gap:12px}.badge{font-size:12px;border:1px solid #546e64;border-radius:30px;padding:6px 10px;color:#b5c9c1;white-space:nowrap}.badge.ready{background:#21463a;color:#a7ecc5;border-color:#42785d}h2{font-size:15px;margin:0 0 14px}.card p{margin:9px 0 16px;font-size:13px}label{font-size:14px}button,select,input{font:inherit}button{border:1px solid #47635a;border-radius:9px;background:#243b33;color:#e7efec;padding:12px 15px;cursor:pointer;min-height:44px}button.primary{color:#102a1d;background:#a7d9b3;border-color:#a7d9b3;font-weight:650}button.quiet{background:transparent;color:#b3c9c0}button:disabled{opacity:.45;cursor:default}button:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid #b0e6c6;outline-offset:3px}.actions{display:flex;gap:9px;flex-wrap:wrap}select{display:block;width:100%;padding:13px 10px;border:1px solid #47635a;border-radius:8px;background:#0e1c18;color:#eff5f0;margin:10px 0 15px;min-height:46px}.toggle{width:22px;height:22px;accent-color:#a7d9b3;flex:none}.hint{font-size:12px;color:#8ca69b}#notice{font-size:13px;line-height:1.6;min-height:22px;color:#cfe2d4;overflow-wrap:anywhere}#notice.error{color:#f4b9ac}[hidden]{display:none!important}#manual{border-top:1px solid #30433e;padding-top:15px;margin-top:15px}#loginUrl{width:100%;background:#0e1c18;color:#b6cfc0;padding:10px;border:1px solid #47635a;border-radius:8px;margin:0 0 10px;font-size:12px}footer{border-top:1px solid #243830;margin-top:22px;padding-top:12px}footer p{font-size:11px;color:#7f9d90}@media(max-width:360px){body{padding:16px}.row{align-items:flex-start}h1{font-size:25px}}
+</style>
+</head>
+<body>
+<header><small>NAIA / AI ASSIST</small><h1>ChatGPT 연결</h1><p>ChatGPT 계정으로 Assist와 Auto Boost를 사용하세요.<br>휴대폰에 AI 모델을 다운로드하지 않습니다.</p></header>
+<section class="card" aria-labelledby="accountTitle">
+<div class="row"><h2 id="accountTitle">01 &nbsp; 계정 연결</h2><span class="badge" id="connection">확인 중</span></div>
+<p id="accountHint">로그인은 휴대폰의 외부 브라우저에서 진행됩니다. 로그인 후 NAIA로 돌아오세요.</p>
+<div class="actions"><button class="primary" id="login">ChatGPT로 로그인</button><button class="quiet" id="disconnect" hidden>연결 해제</button></div>
+<div id="manual" hidden><p>자동으로 브라우저를 열 수 없습니다. 아래 링크를 복사해 Chrome 등 외부 브라우저의 주소창에 붙여 넣으세요.</p><input id="loginUrl" readonly aria-label="외부 브라우저에 붙여 넣을 로그인 주소" autocomplete="off"><button id="copy">로그인 링크 복사</button><p class="hint">이 링크는 공유하지 마세요. 이 화면 안에서 로그인하지 않습니다.</p></div>
+</section>
+<section class="card" aria-labelledby="modelTitle">
+<h2 id="modelTitle">02 &nbsp; 사용할 모델</h2><label for="models">이 계정에서 사용할 수 있는 모델</label>
+<select id="models" disabled><option value="">먼저 ChatGPT에 로그인하세요</option></select>
+<div class="actions"><button id="saveModel" disabled>이 모델 사용</button><button class="quiet" id="refreshModels" disabled>목록 새로고침</button></div><p class="hint">목록은 로그인한 계정에서 확인합니다. 모델을 고른 뒤 ChatGPT 사용을 켜세요.</p>
+</section>
+<section class="card"><div class="row"><div><label for="enabled">Assist · Auto Boost에 ChatGPT 사용</label><p class="hint">선택한 모델을 두 기능에 함께 적용합니다.</p></div><input type="checkbox" id="enabled" class="toggle" disabled></div></section>
+<div id="notice" role="status" aria-live="polite"></div>
+<footer><p>ChatGPT 구독 이용 한도를 사용합니다. 추가 크레딧 사용을 원치 않으면 ChatGPT의 이 앱 연결 설정에서 꺼 주세요.</p><p>계정 연결은 이 기기에 저장됩니다. 연결 해제 시 저장된 로그인 정보를 삭제합니다. 사용 가능 여부와 한도는 계정 및 서비스 상태에 따라 달라집니다.</p></footer>
+<script>
+(() => {
+'use strict';
+const token=location.hash.slice(1);history.replaceState(null,'',location.pathname);
+const $=id=>document.getElementById(id);let current={},busy=false,catalog=[];
+function notice(message,error=false){$('notice').textContent=message;$('notice').classList.toggle('error',error);}
+async function api(path,data){const options={cache:'no-store',headers:{'X-NAIA-ChatGPT':token}};if(data!==undefined){options.method='POST';options.headers['Content-Type']='application/json';options.body=JSON.stringify(data);}const response=await fetch(path,options);const result=await response.json();if(!response.ok)throw new Error(result.error||'요청을 완료하지 못했습니다');return result;}
+function connected(){return !!(current.auth?.authenticated||current.auth?.connected||current.authenticated);}
+function permitted(){return connected()&&current.auth?.plan_enabled===true;}
+function renderModels(models){catalog=Array.isArray(models)?models:[];const select=$('models');select.replaceChildren();for(const model of catalog){const id=String(model.id||model.slug||'');if(!id)continue;const option=document.createElement('option');option.value=id;option.textContent=String(model.display_name||model.name||model.label||id);select.append(option);}if(!select.options.length){const option=document.createElement('option');option.value='';option.textContent=connected()?'목록 새로고침을 눌러 모델을 확인하세요':'먼저 ChatGPT에 로그인하세요';select.append(option);}if([...select.options].some(o=>o.value===current.model))select.value=current.model;}
+function paint(){const signed=connected(),allowed=permitted();$('connection').textContent=signed?(allowed?'연결됨':'사용 권한 필요'):(current.auth?.pending?'로그인 대기 중':'연결 안 됨');$('connection').classList.toggle('ready',allowed);$('login').textContent=signed?(allowed?'다시 로그인':'ChatGPT 사용 권한 허용'):'ChatGPT로 로그인';$('disconnect').hidden=!signed&&!current.auth?.pending;$('disconnect').disabled=busy;$('login').disabled=busy;$('models').disabled=busy||!allowed||!catalog.length;$('saveModel').disabled=busy||!allowed||!$('models').value;$('refreshModels').disabled=busy||!allowed;$('enabled').checked=!!current.enabled;$('enabled').disabled=busy||(!allowed&&!current.enabled)||(!current.model&&!current.enabled);if(signed){$('manual').hidden=true;$('loginUrl').value='';$('accountHint').textContent=allowed?'ChatGPT 계정이 연결되었습니다. 사용할 모델을 선택하세요.':'계정은 연결되었지만 AI 사용 권한이 없습니다. 외부 브라우저에서 ChatGPT 사용 권한을 허용해 주세요.';}else{$('accountHint').textContent='로그인은 휴대폰의 외부 브라우저에서 진행됩니다. 로그인 후 NAIA로 돌아오세요.';}}
+async function refresh(){current=await api('/status');if(Array.isArray(current.models)&&JSON.stringify(current.models)!==JSON.stringify(catalog))renderModels(current.models);paint();if(current.auth?.error)notice(current.auth.error,true);else if(current.error)notice(current.error,true);}
+async function act(work){if(busy)return;busy=true;paint();notice('');try{await work();await refresh();}catch(error){notice(error.message,true);}finally{busy=false;paint();}}
+$('login').onclick=()=>act(async()=>{const data=await api('/login',{});if(data.opened){$('manual').hidden=true;notice('외부 브라우저에서 로그인한 뒤 NAIA로 돌아오세요.');}else{$('loginUrl').value=data.authorization_url||'';$('manual').hidden=false;notice('외부 브라우저에 로그인 링크를 붙여 넣어 주세요.');}});
+$('copy').onclick=async()=>{try{await navigator.clipboard.writeText($('loginUrl').value);notice('로그인 링크를 복사했습니다. 외부 브라우저의 주소창에 붙여 넣으세요.');}catch{$('loginUrl').focus();$('loginUrl').select();notice('주소가 선택되었습니다. 길게 눌러 복사하세요.');}};
+$('disconnect').onclick=()=>act(async()=>{await api('/disconnect',{});catalog=[];renderModels([]);notice('이 기기의 ChatGPT 연결 정보를 삭제했습니다.');});
+$('refreshModels').onclick=()=>act(async()=>{const result=await api('/models');renderModels(result.models);notice('모델 목록을 새로 불러왔습니다.');});
+$('models').onchange=paint;
+$('saveModel').onclick=()=>act(async()=>{await api('/model',{model:$('models').value});notice('Assist와 Auto Boost에 사용할 모델을 저장했습니다.');});
+$('enabled').onchange=()=>{const enabled=$('enabled').checked;act(async()=>{await api('/enabled',{enabled});notice(enabled?'ChatGPT 사용을 켰습니다.':'ChatGPT 사용을 껐습니다.');});};
+if(!token){notice('NAIA를 새로고침하고 ChatGPT 연결 버튼으로 다시 여세요.',true);return;}
+refresh().catch(error=>notice(error.message,true));setInterval(()=>{if(!busy)refresh().catch(error=>notice(error.message,true));},3000);
+})();
+</script>
+</body></html>
