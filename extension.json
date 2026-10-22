@@ -1,0 +1,8 @@
+{
+  "id": "naia_android_string_compat_v1",
+  "name": "NAIA Android 문자열 호환성 패치",
+  "version": "1.0.0",
+  "naia_ext_api": 1,
+  "entry": "main.py",
+  "description": "Android의 일부 Arrow 문자열 커널 부재를 기존 pandas의 Python 문자열 처리로 보완합니다. 적용 해제는 확장을 끈 뒤 앱 백엔드를 완전히 다시 시작하세요."
+}
