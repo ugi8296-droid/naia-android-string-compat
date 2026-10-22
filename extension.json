@@ -1,8 +1,8 @@
 {
-  "id": "naia_android_string_compat_v1",
-  "name": "NAIA Android 문자열 호환성 패치",
-  "version": "1.0.0",
+  "id": "naia_zz_android_tools_v1",
+  "name": "NAIA Android 도구 0.1.0",
+  "version": "0.1.0",
   "naia_ext_api": 1,
   "entry": "main.py",
-  "description": "Android의 일부 Arrow 문자열 커널 부재를 기존 pandas의 Python 문자열 처리로 보완합니다. 적용 해제는 확장을 끈 뒤 앱 백엔드를 완전히 다시 시작하세요."
+  "description": "아티스트 썸네일 저메모리 모드(켜기/끄기), 폴더 열기 보완, 개인용 ChatGPT 플러그인 연결. NAIA v2.0.48 전용이며 연결·수정·생성 권한은 설정에서 선택합니다."
 }
