@@ -206,15 +206,29 @@ class PanelServer:
         self.thread.join(timeout=2)
 
 
+def patch_index(source: str) -> str:
+    """Use the host Settings layout; do not cover image actions with a launcher."""
+    marker = '<div class="settings-page active" data-settings-page-content="global">'
+    return _replace(source, marker, marker + """
+          <div class="settings-group" id="naiaChatgptSettings">
+            <h3 class="settings-group-title">ChatGPT</h3>
+            <div class="settings-toggle-row">
+              <button type="button" class="mod-btn-secondary settings-action-btn" data-chatgpt-open>
+                ChatGPT 연결
+              </button>
+              <p class="settings-toggle-desc">계정 연결과 사용할 모델을 설정합니다. Assist와 Auto Boost에 함께 적용됩니다.</p>
+            </div>
+          </div>""")
+
+
 def _injection(panel_url):
     return """<script>(()=>{
 if(window.__naiaChatgptPanel)return;window.__naiaChatgptPanel=true;
 const dialog=document.createElement('dialog');dialog.setAttribute('aria-label','ChatGPT 연결');
 dialog.style.cssText='padding:0;border:1px solid #394a4b;border-radius:18px;width:min(560px,94vw);max-height:92vh;background:#0f191c;color:#edf4f3;z-index:2147483647';
 const close=document.createElement('button');close.textContent='닫기 ×';close.style.cssText='float:right;margin:10px 16px;padding:8px;border:0;background:transparent;color:inherit;font:inherit';close.onclick=()=>dialog.close();
-const frame=document.createElement('iframe');frame.title='ChatGPT 연결 및 모델 선택';frame.referrerPolicy='no-referrer';frame.style.cssText='width:100%;height:min(700px,80vh);border:0;display:block';frame.src=PANEL_URL;
+const frame=document.createElement('iframe');frame.title='ChatGPT 연결 및 모델 선택';frame.referrerPolicy='no-referrer';frame.allow="clipboard-write 'src'";frame.style.cssText='width:100%;height:min(700px,80vh);border:0;display:block';frame.src=PANEL_URL;
 dialog.append(close,frame);document.body.append(dialog);
-const button=document.createElement('button');button.type='button';button.textContent='ChatGPT 연결';button.dataset.chatgptOpen='';button.style.cssText='position:fixed;right:16px;bottom:16px;z-index:10000;border:1px solid #638c83;border-radius:30px;padding:12px 18px;background:#153e36;color:#eefaf3;font:600 14px sans-serif;box-shadow:0 5px 20px #0005';document.body.append(button);
 document.addEventListener('click',e=>{if(e.target.closest('[data-chatgpt-open]')){e.preventDefault();dialog.showModal();}});
 })();</script>""".replace("PANEL_URL", json.dumps(panel_url))
 
@@ -238,6 +252,7 @@ def install_ui(controller):
         index_source = index_path.read_text(encoding="utf-8")
         if index_source.count("</body>") != 1:
             raise RuntimeError("Unsupported NAIA index revision")
+        index_source = patch_index(index_source)
         asset_root = web_root / "js"
         adapted = {}
         for name in ("llmSetupPanel.mjs", "boostV2Panel.mjs", "assistPanel.mjs"):

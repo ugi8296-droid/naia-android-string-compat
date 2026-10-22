@@ -37,7 +37,20 @@ function paint(){const signed=connected(),allowed=permitted();$('connection').te
 async function refresh(){current=await api('/status');if(Array.isArray(current.models)&&JSON.stringify(current.models)!==JSON.stringify(catalog))renderModels(current.models);paint();if(current.auth?.error)notice(current.auth.error,true);else if(current.error)notice(current.error,true);}
 async function act(work){if(busy)return;busy=true;paint();notice('');try{await work();await refresh();}catch(error){notice(error.message,true);}finally{busy=false;paint();}}
 $('login').onclick=()=>act(async()=>{const data=await api('/login',{});if(data.opened){$('manual').hidden=true;notice('외부 브라우저에서 로그인한 뒤 NAIA로 돌아오세요.');}else{$('loginUrl').value=data.authorization_url||'';$('manual').hidden=false;notice('외부 브라우저에 로그인 링크를 붙여 넣어 주세요.');}});
-$('copy').onclick=async()=>{try{await navigator.clipboard.writeText($('loginUrl').value);notice('로그인 링크를 복사했습니다. 외부 브라우저의 주소창에 붙여 넣으세요.');}catch{$('loginUrl').focus();$('loginUrl').select();notice('주소가 선택되었습니다. 길게 눌러 복사하세요.');}};
+$('copy').onclick=async()=>{
+  const input=$('loginUrl'),text=input.value;
+  if(!text){notice('먼저 ChatGPT로 로그인을 눌러 새 로그인 링크를 만드세요.',true);return;}
+  let copied=false;
+  // Some Android WebViews lack the asynchronous clipboard API. Copy the actual
+  // selected input synchronously while this tap still has user activation.
+  input.focus();input.select();input.setSelectionRange(0,text.length);
+  try{copied=document.execCommand('copy')===true;}catch{}
+  if(!copied&&navigator.clipboard?.writeText){
+    try{await navigator.clipboard.writeText(text);copied=true;}catch{}
+  }
+  if(copied){notice('로그인 링크를 복사했습니다. 외부 브라우저의 주소창에 붙여 넣으세요.');}
+  else{notice('자동 복사에 실패했습니다. 위의 로그인 주소를 길게 눌러 ‘복사’를 선택하세요.',true);}
+};
 $('disconnect').onclick=()=>act(async()=>{await api('/disconnect',{});catalog=[];renderModels([]);notice('이 기기의 ChatGPT 연결 정보를 삭제했습니다.');});
 $('refreshModels').onclick=()=>act(async()=>{const result=await api('/models');renderModels(result.models);notice('모델 목록을 새로 불러왔습니다.');});
 $('models').onchange=paint;

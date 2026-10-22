@@ -10,7 +10,7 @@ import sys
 import threading
 import types
 
-_PACKAGE = "_naia_chatgpt_connect_v1"
+_PACKAGE = "_naia_chatgpt_connect_v2"
 _controller = None
 
 
@@ -143,8 +143,22 @@ class Controller:
         self.auth.close()
 
 
+def _close_disabled_previous_version():
+    previous = sys.modules.get("naia_ext_naia_chatgpt_connect_v1")
+    controller = getattr(previous, "_controller", None)
+    if controller is None:
+        return
+    record = getattr(getattr(controller, "ctx", None), "_record", None)
+    if getattr(record, "enabled", None) is not False:
+        raise RuntimeError("Settings → Extension에서 이전 ChatGPT 구독 연결 확장을 먼저 끈 뒤 새 버전을 활성화하세요.")
+    # Settings OFF is explicit user intent; retire only that disabled version's
+    # listeners and wrappers. close() preserves its credentials and settings.
+    controller.close()
+
+
 def register(ctx):
     global _controller
+    _close_disabled_previous_version()
     if _controller is not None:
         _controller.close()
         _controller = None
@@ -160,10 +174,10 @@ def register(ctx):
         controller._cleanup.append(ui_handle if callable(ui_handle) else ui_handle.close)
         ctx.register_panel([
             {"key": "enabled", "type": "bool", "label": "AI Assist · Boost에 ChatGPT 사용", "default": False,
-             "help": "화면의 ChatGPT 연결 버튼에서 로그인하고 모델을 선택하세요. 요청은 ChatGPT 이용 한도를 사용합니다."},
+             "help": "Settings → Global → ChatGPT 연결에서 로그인하고 모델을 선택하세요. 요청은 ChatGPT 이용 한도를 사용합니다."},
             {"key": "help", "type": "action", "label": "연결 화면 안내"},
-        ], title="ChatGPT 구독 연결", on_action=lambda key: ctx.show_toast(
-            "앱 화면을 새로고침한 뒤 ChatGPT 연결 버튼을 누르세요. 로그인 → 모델 목록 → 모델 선택 → 사용 켜기 순서입니다."
+        ], title="ChatGPT 구독 연결 0.1.1", on_action=lambda key: ctx.show_toast(
+            "Settings → Global → ChatGPT 연결을 누르세요. 로그인 → 모델 목록 → 모델 선택 → 사용 켜기 순서입니다."
         ) if key == "help" else None)
     except BaseException:
         controller.close()
