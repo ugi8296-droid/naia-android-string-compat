@@ -14,7 +14,8 @@ import types
 
 RELAY_URL = "https://naia-tablet-link.ugi8296.chatgpt.site"
 DEFAULTS = {"low_memory": True, "cache_mb": 32, "plugin_enabled": False,
-            "allow_read": True, "allow_edit": False, "allow_generate": False}
+            "allow_read": True, "allow_screen": False, "allow_control": False,
+            "allow_edit": False, "allow_generate": False}
 _PACKAGE = "_naia_android_tools_v1"
 _controller = None
 
@@ -61,7 +62,7 @@ class Controller:
         self.ctx, self.state_root, self.folder_module = ctx, Path(state_root), folder_module
         self.pair_path = self.state_root / "pairing.json"
         self._lock, self._closed, self._cleanup = threading.RLock(), False, []
-        self.memory, self.bridge, self._pair = None, None, None
+        self.memory, self.bridge, self.screen, self._pair = None, None, None, None
         try:
             if self.pair_path.stat().st_size <= 32768:
                 self._pair = _pairing(json.loads(self.pair_path.read_text(encoding="utf-8")))
@@ -93,15 +94,19 @@ class Controller:
         with self._lock:
             settings = self.settings()
             return {**(self._pair or {}), "enabled": settings["plugin_enabled"] and bool(self._pair) and self.active(),
-                    "permissions": {k: settings["allow_" + k] for k in ("read", "edit", "generate")}}
+                    "permissions": {k: settings["allow_" + k] for k in ("read", "screen", "control", "edit", "generate")}}
 
     def status(self):
         memory = self.memory.refresh() if self.memory else {}
         with self._lock:
-            return {"settings": self.settings(), "memory": memory,
-                "bridge": self.bridge.status() if self.bridge else {"state": "stopped"},
+            result = {"settings": self.settings(), "memory": memory,
                 "paired": bool(self._pair), "extension_active": self.available(),
                 "armed": bool(self.ctx._record.armed), "relay_url": RELAY_URL}
+        # Broker permission guards acquire this controller's lock. Do not hold
+        # it while entering the broker (or simultaneous status/poll deadlocks).
+        result["bridge"] = self.bridge.status() if self.bridge else {"state": "stopped"}
+        result["screen"] = self.screen.status() if self.screen else {"ready": False}
+        return result
 
     def _save(self, settings):
         if not self.ctx.save_settings(settings):
@@ -130,7 +135,7 @@ class Controller:
         with self._lock:
             # Persist revocation first: a failed import never inherits old writes.
             disabled = {**self.settings(), "plugin_enabled": False, "allow_read": True,
-                        "allow_edit": False, "allow_generate": False}
+                        "allow_screen": False, "allow_control": False, "allow_edit": False, "allow_generate": False}
             self._save(disabled)
             temporary = self.pair_path.with_suffix(".tmp")
             fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
@@ -150,7 +155,8 @@ class Controller:
     def disconnect(self):
         self.require_available()
         with self._lock:
-            self._save({**self.settings(), "plugin_enabled": False, "allow_edit": False, "allow_generate": False})
+            self._save({**self.settings(), "plugin_enabled": False, "allow_screen": False,
+                        "allow_control": False, "allow_edit": False, "allow_generate": False})
             self._pair = None
             self.pair_path.unlink(missing_ok=True)
         return self.status()
@@ -190,6 +196,8 @@ class Controller:
             self._closed = True
         if self.bridge:
             self.bridge.close()
+        if self.screen:
+            self.screen.close()
         for cleanup in reversed(self._cleanup):
             try:
                 cleanup()
@@ -203,21 +211,22 @@ def register(ctx):
     if _controller:
         _controller.close()
         _controller = None
-    folder, memory, bridge, ui = [_module(n) for n in
-        ("naia_folder_open", "naia_artist_memory", "naia_device_bridge", "naia_tools_ui")]
+    folder, memory, bridge, ui, screen = [_module(n) for n in
+        ("naia_folder_open", "naia_artist_memory", "naia_device_bridge", "naia_tools_ui", "naia_screen_service")]
     controller = Controller(ctx, _private_directory(ctx), folder)
     try:
         controller.memory = memory.install(controller.memory_settings, state_root=controller.state_root)
         existing = getattr(ctx._app_context, "artist_thumbnail_service", None)
         if existing is not None:
             controller.memory.attach(existing)
+        controller.screen = screen.ScreenService()
         controller.bridge = bridge.DeviceBridge(ctx, controller.bridge_settings,
-            state_root=controller.state_root, allowed_origins={RELAY_URL})
+            state_root=controller.state_root, allowed_origins={RELAY_URL}, screen_service=controller.screen)
         handle = ui.install_ui(controller, folder, memory)
         controller._cleanup.append(handle if callable(handle) else handle.close)
         ctx.register_panel([{"key": "help", "type": "action", "label": "Android 도구 설정 안내",
             "help": "Settings → Global → Android 도구 · 플러그인에서 설정합니다."}],
-            title="Android 도구 0.1.0", on_action=lambda key: ctx.show_toast(
+            title="Android 도구 0.2.0", on_action=lambda key: ctx.show_toast(
                 "화면 새로고침 후 Settings → Global → Android 도구 · 플러그인을 여세요.") if key == "help" else None)
         controller.bridge.start()
     except BaseException:

@@ -79,7 +79,8 @@ class PanelServer:
                     return
                 try:
                     size = int(self.headers.get("Content-Length", "0"))
-                    if not 0 < size <= 65536 or self.headers.get("Transfer-Encoding"):
+                    maximum = 920000 if self.path == "/screen/result" else 65536
+                    if not 0 < size <= maximum or self.headers.get("Transfer-Encoding"):
                         raise ValueError()
                     data = json.loads(self.rfile.read(size))
                     if not isinstance(data, dict):
@@ -100,6 +101,19 @@ class PanelServer:
                         result = owner.controller.open_folder(data["target"])
                     elif self.path == "/open-relay":
                         result = owner.controller.open_relay()
+                    elif self.path in ("/screen/poll", "/screen/result"):
+                        screen = owner.controller.screen
+                        config = owner.controller.bridge_settings()
+                        if screen is None or config.get("enabled") is not True or config["permissions"].get("screen") is not True:
+                            raise ValueError("화면 보기 권한을 켜 주세요.")
+                        if self.path == "/screen/poll":
+                            if set(data) != {"client_id"}:
+                                raise ValueError("잘못된 화면 요청입니다.")
+                            result = screen.poll(data["client_id"])
+                        else:
+                            if set(data) != {"client_id", "id", "result", "is_error"}:
+                                raise ValueError("잘못된 화면 응답입니다.")
+                            result = screen.submit(data["client_id"], {k: v for k, v in data.items() if k != "client_id"})
                     else:
                         self.reply(404, {"error": "Not found"})
                         return
@@ -141,7 +155,12 @@ def patch_index(source):
 
 
 def _injection(panel_url):
-    return r'''<script>(()=>{
+    directory = Path(__file__).resolve().parent
+    scripts = [directory / "vendor/html2canvas-1.4.1.min.js", directory / "naia_screen_agent.js"]
+    libraries = "\n".join(path.read_text(encoding="utf-8") for path in scripts)
+    # Inline only packaged static assets. Never insert device data in scripts.
+    libraries = libraries.replace("</script", "<\\/script")
+    return '<script>' + libraries + '</script>' + r'''<script>(()=>{
 if(window.__naiaAndroidToolsPanel)return;window.__naiaAndroidToolsPanel=true;
 const panelURL=new URL(PANEL_URL);const panelOrigin=panelURL.origin;
 panelURL.hash += '&parent='+encodeURIComponent(location.origin);
@@ -150,6 +169,7 @@ dialog.style.cssText='padding:0;border:1px solid #475569;border-radius:16px;widt
 const close=document.createElement('button');close.textContent='닫기 ×';close.style.cssText='display:block;margin:8px 12px 8px auto;min-height:44px;padding:8px 16px;background:#243244;color:#fff;border:0;border-radius:8px';close.onclick=()=>dialog.close();
 const frame=document.createElement('iframe');frame.title='Android 도구 · 플러그인';frame.referrerPolicy='no-referrer';frame.style.cssText='width:100%;height:min(740px,78vh);border:0;display:block';frame.src=panelURL.href;
 dialog.append(close,frame);document.body.append(dialog);
+window.__naiaInstallScreenAgent({frame,panelOrigin});
 let serial=0,ready=false,revision;const pending=new Map();
 window.naiaAndroidTools={openFolderNative(target){
  if(!ready||!['save','artist'].includes(target))return Promise.resolve({opened:false});
