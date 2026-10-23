@@ -20,7 +20,7 @@ UPDATER_ID = "naia_android_tools_update_020"
 FROM_VERSION = "0.1.0"
 TO_VERSION = "0.2.0"
 ARCHIVE_NAME = "android-tools-0.2.0.zip"
-PAYLOAD_SHA256 = "1aafc52b2a122ce41c5aff07d19f019b7a01d8ac7f025f56be0b0f7017e957c3"  # build_payload.py pins the reviewed archive in source.
+PAYLOAD_SHA256 = "5589ad14905b67dc9fe825556d2f7e230407a0f7b3a20a647ba52f13121674e2"  # build_payload.py pins the reviewed archive in source.
 FILES = frozenset({
     "extension.json", "main.py", "naia_artist_memory.py", "naia_device_bridge.py",
     "naia_folder_open.py", "naia_tools_ui.py", "android_tools_panel.html",

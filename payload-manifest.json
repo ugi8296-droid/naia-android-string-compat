@@ -3,11 +3,11 @@
   "from_version": "0.1.0",
   "to_version": "0.2.0",
   "archive": "android-tools-0.2.0.zip",
-  "sha256": "1aafc52b2a122ce41c5aff07d19f019b7a01d8ac7f025f56be0b0f7017e957c3",
+  "sha256": "5589ad14905b67dc9fe825556d2f7e230407a0f7b3a20a647ba52f13121674e2",
   "files": {
     "LICENSE": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
     "NOTICE.txt": "f9b6cf46d17bbcd41c7daa5d264c2e2610a9413030eb24258a8cb3d6610be952",
-    "README.md": "44d2dfd3f477c3b5bfb7d33843cacf5be622fd61c27c6bc68cee74ac63977f1a",
+    "README.md": "8618390c3f535fc312b3c6a8b0369ef06cc8014eda539ff22fdb2f26f444ff9b",
     "android_tools_panel.html": "3dd0527e4ecbf587da0f2d65b9e50fefd49a088162c28a37afb7563ce0fa4a19",
     "extension.json": "814437cb06d36883491e4c30f972d9bb19dc88e4194c6de8e625ff9589b6388c",
     "main.py": "6845086bcadfe5f49f627a857151625cd608cfba52934963fe7855ebe1cb49ab",
