@@ -1,3 +1,17 @@
+# 0.2.4 snapshot navigation fix — 2026-10-23
+
+Keeps at most four snapshots for 120 seconds. Additional reads and unrelated trusted input no longer discard unchanged audited navigation targets. Exact DOM identity, signature, dirty-target, visibility and overlay checks remain. Edits and page-wide scrolling still reject intervening user input. Every action consumes all older snapshots. Snapshots are bound to their originating browser client; lease handoffs return screen_session_changed before dispatch. Android shell view-switch title whitespace and tabindex-only controls are recognized without enabling restricted actions.
+
+Passed: 88 Android-tools Python tests, 27 JavaScript screen-agent tests, 25 repair/downloader tests. The two edit/revocation integration tests now obtain a real snapshot before attempting an action. The relay passed 23 tests including legacy and versioned screen result round trips and strict metadata rejection.
+
+Live verification: the deployed relay had rejected Android agent_version with HTTP400. The compatibility fix was published to the existing private Site (source commit 2b59d5f21cc6162f7a8558dc85444b42625ade07). Actual tablet screen reads then completed and returned agent_version 0.2.3. Quick and a separate Next-page attempt still returned stale_snapshot on that installed code. The 0.2.4 client fix is locally verified; device menu execution remains pending its installation and page refresh. No claim of live 0.2.4 click success is made.
+
+Existing credentials, permission settings, extension identity, generation and storage behavior are unchanged.
+
+Payload SHA-256: `a52426066ac849ea52ce63e8cf8d9334d270ecd212b567ae035b543c176a3c40`.
+
+---
+
 # 0.2.3 transport lifecycle fix — 2026-10-23
 
 The transport iframe is mounted outside the settings dialog. A separate lazy-loaded settings iframe cannot claim screen commands. Foreground parent messages drive polling and repeat readiness handshakes even when iframe timers are suspended; pageshow and visibility restoration wake the transport. No automatic page reload or credential/permission change occurs.

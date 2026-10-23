@@ -5,15 +5,15 @@
     "files": {
       "LICENSE": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
       "NOTICE.txt": "81de492e4204a58651516b94b3d6bc1e6b657e0c6fc2ea326a03cbf453cf4542",
-      "README.md": "2fed5389739a4418eebd8490b3a3fcb28f32b4c4432a99120be87505488b3902",
+      "README.md": "006c1ca7c5097890e2d28ac6035675417c56c8e517725d9948b04b8d06c983e3",
       "android_tools_panel.html": "d084157d136faee83bd4f6751868ac98862cfc228f6084f4bab0f8394d7f4a54",
-      "extension.json": "649d7f3c0c02dd9c0a83bb89d7fb9fc05ed0d6d0ceeb014e1ed09612bb2ccc8c",
-      "main.py": "3bc740debd2c7752c1021f9e51ea108993813012d3037ef37dd061bb0006a1b1",
+      "extension.json": "9ae255ffe881c48bb6fe6025b123aaf67b4d5336c7b9c238b9595f189c1ce642",
+      "main.py": "f47e1be541a2f46075696268fbf3e82fe9cddc72d1b096b7d3b85efdf9d76fd5",
       "naia_artist_memory.py": "bfc933f608024bf34477a2d993406516516a3e9395124796bc0b593c9c046b9d",
-      "naia_device_bridge.py": "b1eaa87b91856bf3c928c228503745be81cf0fba51269007afa1f60a4a63c694",
+      "naia_device_bridge.py": "9d6103203d34bda4631ff3f852695cd7072eaf6f024a228e63cee89dff85167e",
       "naia_folder_open.py": "6a716369b4022e20ac41199651b57301ec9f662c748f5f7c33eafc34086f595a",
-      "naia_screen_agent.js": "d2ed9582517fb6485ce47dd18d0f7c5bf3d5a88172b09d1bfce6b0cb638318a2",
-      "naia_screen_service.py": "1704f4f4a7405067270cf830bf678a3330e37b4800171beb313a142838eff19d",
+      "naia_screen_agent.js": "a45b758df1fba09365174636b4ed1968a86928e7858d4bdf01974f8050d73a71",
+      "naia_screen_service.py": "ab40aa0663faaf4e8dc11799b83ea216d175cb156ffe88c3dea46898d90ce34a",
       "naia_tools_ui.py": "76eb251d8e52993d6537e2f4f13bff549895d074948b0a07c087066c31c3a589",
       "vendor/html2canvas-1.4.1.min.js": "e87e550794322e574a1fda0c1549a3c70dae5a93d9113417a429016838eab8cb",
       "vendor/html2canvas-LICENSE.txt": "86200ce4e92d9a22c41c8647a55f7a5fddff304ff89b4d36ecc699ed8c123d2c"
@@ -96,6 +96,6 @@
       ]
     }
   },
-  "sha256": "db75ae1d50c3641bfd787385f58a738defe2b7fbc913b3e178dd0a1c7edb9d98",
-  "target_version": "0.2.3"
+  "sha256": "a52426066ac849ea52ce63e8cf8d9334d270ecd212b567ae035b543c176a3c40",
+  "target_version": "0.2.4"
 }
