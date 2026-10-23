@@ -38,6 +38,8 @@ def open_system_browser(url: str) -> bool:
 
 
 def _replace(source, old, new):
+    if source.count(new) == 1:
+        return source
     if source.count(old) != 1:
         raise RuntimeError("Unsupported NAIA frontend revision; ChatGPT UI adapter was not applied")
     return source.replace(old, new, 1)
@@ -241,15 +243,16 @@ def install_ui(controller):
     leaving Assist gated on a local GGUF installation.
     """
     module = importlib.import_module("app.backend.server.web_shell_routes")
-    from fastapi.responses import HTMLResponse, Response
+    from fastapi.responses import Response
     from app.web import resolve_remote_web_dir
 
     # Resolve the same source location as the host and validate every seam before
     # starting a listener or replacing functions. An unknown APK must stay usable.
+    previous_file, previous_asset = module._web_file, module._web_asset
     try:
         web_root = Path(resolve_remote_web_dir(controller.ctx._app_context.repo_root)).resolve()
         index_path = web_root / "index.html"
-        index_source = index_path.read_text(encoding="utf-8")
+        index_source = _response_text(previous_file(index_path, "text/html"))
         if index_source.count("</body>") != 1:
             raise RuntimeError("Unsupported NAIA index revision")
         index_source = patch_index(index_source)
@@ -257,28 +260,40 @@ def install_ui(controller):
         adapted = {}
         for name in ("llmSetupPanel.mjs", "boostV2Panel.mjs", "assistPanel.mjs"):
             asset = "features/" + name
-            adapted[asset] = patch_feature(name, (asset_root / asset).read_text(encoding="utf-8"))
+            patch_feature(name, _response_text(previous_asset(asset_root, asset, default_media_type="text/javascript")))
+            adapted[asset] = name
     except (AttributeError, OSError) as exc:
         raise RuntimeError("NAIA frontend could not be validated; ChatGPT UI was not installed") from exc
 
-    previous_file, previous_asset = module._web_file, module._web_asset
     server = PanelServer(controller)
     active = True
 
+    def response(previous, text, media_type):
+        headers = {k: v for k, v in getattr(previous, "headers", {}).items()
+                   if k.lower() not in {"content-length", "content-type", "content-encoding", "etag", "last-modified"}}
+        headers["Cache-Control"] = "no-store"
+        return Response(text, media_type=media_type, headers=headers,
+                        background=getattr(previous, "background", None))
+
     def web_file(path, media_type):
+        previous = previous_file(path, media_type)
         if active and Path(path).resolve() == index_path and media_type == "text/html":
-            return HTMLResponse(index_source.replace("</body>", _injection(server.panel_url) + "</body>"), headers={"Cache-Control": "no-store"})
-        return previous_file(path, media_type)
+            text = patch_index(_response_text(previous))
+            return response(previous, text.replace("</body>", _injection(server.panel_url) + "</body>", 1), "text/html")
+        return previous
 
     def web_asset(root, asset_path, *, default_media_type="application/octet-stream"):
+        previous = previous_asset(root, asset_path, default_media_type=default_media_type)
         if active and Path(root).resolve() == asset_root and asset_path in adapted:
-            return Response(adapted[asset_path], media_type="text/javascript", headers={"Cache-Control": "no-store"})
-        return previous_asset(root, asset_path, default_media_type=default_media_type)
+            return response(previous, patch_feature(adapted[asset_path], _response_text(previous)), "text/javascript")
+        return previous
 
     module._web_file, module._web_asset = web_file, web_asset
 
     def cleanup():
         nonlocal active
+        if not active:
+            return
         active = False
         if module._web_file is web_file:
             module._web_file = previous_file
@@ -289,3 +304,17 @@ def install_ui(controller):
     cleanup.panel_url = server.panel_url
     cleanup.server = server
     return cleanup
+
+
+def _response_text(response):
+    if getattr(response, "status_code", 200) != 200:
+        raise RuntimeError("NAIA 화면 파일을 읽지 못했습니다.")
+    body = getattr(response, "body", None)
+    if isinstance(body, bytes):
+        return body.decode("utf-8")
+    if isinstance(body, str):
+        return body
+    path = getattr(response, "path", None)
+    if path is not None and Path(path).is_file():
+        return Path(path).read_text(encoding="utf-8")
+    raise RuntimeError("이전 확장의 화면 응답을 안전하게 읽을 수 없습니다.")

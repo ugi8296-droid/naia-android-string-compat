@@ -1,7 +1,7 @@
 {
   "id": "naia_chatgpt_connect_v2",
-  "name": "NAIA ChatGPT 구독 연결 0.1.1 (미리보기)",
-  "version": "0.1.1",
+  "name": "NAIA ChatGPT 구독 연결 0.1.2 (미리보기)",
+  "version": "0.1.2",
   "naia_ext_api": 1,
   "entry": "main.py",
   "description": "ChatGPT 공식 로그인으로 AI Assist와 Boost를 연결합니다. 별도 API 키는 사용하지 않습니다. ChatGPT 이용 한도가 적용되며 기기 로그인은 최초 사용 시 필요합니다. NAIA v2.0.48 전용 미리보기입니다."

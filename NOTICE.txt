@@ -1,4 +1,4 @@
-NAIA ChatGPT Connect 0.1.0 preview
+NAIA ChatGPT Connect 0.1.2 preview
 
 For NAIA 2.0 v2.0.48 by DNT-LAB.
 Upstream: https://github.com/DNT-LAB/NAIA2.0
@@ -10,3 +10,6 @@ No endorsement by DNT-LAB or OpenAI is implied.
 
 Only runtime source, license and installation documentation are distributed.
 Credentials, diagnostics and development workspace data are not included.
+
+This repair preserves the extension ID, saved settings and existing auth data.
+Existing installations update through the android-tools-repair branch.
