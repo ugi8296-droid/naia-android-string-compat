@@ -5,15 +5,15 @@
     "files": {
       "LICENSE": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
       "NOTICE.txt": "81de492e4204a58651516b94b3d6bc1e6b657e0c6fc2ea326a03cbf453cf4542",
-      "README.md": "006c1ca7c5097890e2d28ac6035675417c56c8e517725d9948b04b8d06c983e3",
-      "android_tools_panel.html": "d084157d136faee83bd4f6751868ac98862cfc228f6084f4bab0f8394d7f4a54",
-      "extension.json": "9ae255ffe881c48bb6fe6025b123aaf67b4d5336c7b9c238b9595f189c1ce642",
-      "main.py": "f47e1be541a2f46075696268fbf3e82fe9cddc72d1b096b7d3b85efdf9d76fd5",
+      "README.md": "b44fc1254df175e7691665058379348dc5ca53da3f2582567c16e8a1b6ba55c0",
+      "android_tools_panel.html": "f82df04cad2fc7c57c1a0f7fa986c9d6624f21259bc2924a24d4f3a8213c3a39",
+      "extension.json": "64ca32044159aadd3649a88ac467682e8abc3f8413aca1fc04625a2455685c6f",
+      "main.py": "d48a2e1a65970d7ad219591daa21c2d0e444fa70c96aae611d7705213e5aa77f",
       "naia_artist_memory.py": "bfc933f608024bf34477a2d993406516516a3e9395124796bc0b593c9c046b9d",
-      "naia_device_bridge.py": "9d6103203d34bda4631ff3f852695cd7072eaf6f024a228e63cee89dff85167e",
+      "naia_device_bridge.py": "0054ba58650b458dc4486af4f969a4b0bb4824d25d49d2dfd7b812b10eebcde3",
       "naia_folder_open.py": "6a716369b4022e20ac41199651b57301ec9f662c748f5f7c33eafc34086f595a",
-      "naia_screen_agent.js": "a45b758df1fba09365174636b4ed1968a86928e7858d4bdf01974f8050d73a71",
-      "naia_screen_service.py": "ab40aa0663faaf4e8dc11799b83ea216d175cb156ffe88c3dea46898d90ce34a",
+      "naia_screen_agent.js": "aaf476d7eb23d39709bb4fd8050e8dbd4b0a9786ee87314affbbb8862e18a4c7",
+      "naia_screen_service.py": "ce5698bd73e1d83bd6d7ac5d310d16784fbc10f61cd1ab047ecb3e180819ee71",
       "naia_tools_ui.py": "76eb251d8e52993d6537e2f4f13bff549895d074948b0a07c087066c31c3a589",
       "vendor/html2canvas-1.4.1.min.js": "e87e550794322e574a1fda0c1549a3c70dae5a93d9113417a429016838eab8cb",
       "vendor/html2canvas-LICENSE.txt": "86200ce4e92d9a22c41c8647a55f7a5fddff304ff89b4d36ecc699ed8c123d2c"
@@ -96,6 +96,6 @@
       ]
     }
   },
-  "sha256": "a52426066ac849ea52ce63e8cf8d9334d270ecd212b567ae035b543c176a3c40",
-  "target_version": "0.2.4"
+  "sha256": "a7437d55dc7c4191e3e537fe7bde1166d9b4e50a240a71723def33d57caa7197",
+  "target_version": "0.2.5"
 }

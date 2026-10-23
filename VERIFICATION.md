@@ -1,3 +1,17 @@
+# 0.2.5 generic Web UI control — 2026-10-23
+
+User requested removal of Settings and per-feature restrictions. Screen+control now authorizes visible web controls including Settings, input, generation and file buttons. Direct API edit/generate tool permissions remain separate. Existing saved permission values and credentials are preserved. Secret field values remain redacted in observations and captures.
+
+Default screen reads and UI action results now request JPEG images. Capture failures are bounded capture_error metadata; completed actions are not reported as failed merely because their follow-up image failed. Capture rendering is limited to 8 seconds and late canvases are released. Background DOM mutations no longer invalidate a completed cloned image. New visibility and collection rules retain rendered fixed panels and prioritize Prompt/Params/Negative and navigation tabs over large grids.
+
+Validation: 89 Android-tools Python tests, 35 JavaScript screen tests, 25 relay tests. Tests cover settings/generation/file-control discovery, secret redaction, generic input without direct API edit permission, background capture mutations, post-action images and timeout semantics. Relay source 7d9ccd1cc06defcef1014c0da198458640a2a70a was published to the existing owner-private Site. The repair/downloader tests are run against this exact payload before publication.
+
+Limits: JavaScript tests use a DOM/rendering harness; they do not prove Android WebView rendering. On the installed 0.2.4, live capture failed with screen_changed_during_capture and metadata exposed only five header controls. The new 0.2.5 client must be applied and the page refreshed before live verification. No live 0.2.5 menu/capture success is claimed. This is snapshot-based web UI control, not continuous video or Android system UI control. Native file pickers, cross-origin iframe contents, and drag gestures remain outside the API.
+
+Payload SHA-256: `a7437d55dc7c4191e3e537fe7bde1166d9b4e50a240a71723def33d57caa7197`.
+
+---
+
 # 0.2.4 snapshot navigation fix — 2026-10-23
 
 Keeps at most four snapshots for 120 seconds. Additional reads and unrelated trusted input no longer discard unchanged audited navigation targets. Exact DOM identity, signature, dirty-target, visibility and overlay checks remain. Edits and page-wide scrolling still reject intervening user input. Every action consumes all older snapshots. Snapshots are bound to their originating browser client; lease handoffs return screen_session_changed before dispatch. Android shell view-switch title whitespace and tabindex-only controls are recognized without enabling restricted actions.
