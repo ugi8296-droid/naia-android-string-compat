@@ -4,17 +4,17 @@
   "main": {
     "files": {
       "LICENSE": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
-      "NOTICE.txt": "ec3958ea30f8efc256936c15cc9325645861f968a5aad9e52ca93dcb1ab0b5b1",
-      "README.md": "5c2a58a40a0f70cde52e34bae54e82e24fa4a9f44288e9a33eaf65c0f0286f61",
-      "android_tools_panel.html": "3dd0527e4ecbf587da0f2d65b9e50fefd49a088162c28a37afb7563ce0fa4a19",
-      "extension.json": "882f99f85ecc8136ab9f1f573a24fde44e17b2e853f09253b88d55d6936e17ad",
-      "main.py": "9ce92648122d93b36826321d2983193705d71ff22dd07f5ad384a7edb44e8116",
+      "NOTICE.txt": "81de492e4204a58651516b94b3d6bc1e6b657e0c6fc2ea326a03cbf453cf4542",
+      "README.md": "fc37576e12b34286fcaa2f3b8bc05a60b6d19a9c4e2f4d18f52a4ab5ace01f6d",
+      "android_tools_panel.html": "d084157d136faee83bd4f6751868ac98862cfc228f6084f4bab0f8394d7f4a54",
+      "extension.json": "649d7f3c0c02dd9c0a83bb89d7fb9fc05ed0d6d0ceeb014e1ed09612bb2ccc8c",
+      "main.py": "3bc740debd2c7752c1021f9e51ea108993813012d3037ef37dd061bb0006a1b1",
       "naia_artist_memory.py": "bfc933f608024bf34477a2d993406516516a3e9395124796bc0b593c9c046b9d",
-      "naia_device_bridge.py": "05a4c0973896777c158373a0b73a89ab3984ee8288dc39d94fb17a513ea286a6",
+      "naia_device_bridge.py": "b1eaa87b91856bf3c928c228503745be81cf0fba51269007afa1f60a4a63c694",
       "naia_folder_open.py": "6a716369b4022e20ac41199651b57301ec9f662c748f5f7c33eafc34086f595a",
-      "naia_screen_agent.js": "ea145100c6776a9af94091b1f4042221b7cc70ff2b52c6800b1a9811d5fcd720",
-      "naia_screen_service.py": "24fb7d9a456a34068a54db841756e7a4568ce9c13b1b61d01112098040a0e3b5",
-      "naia_tools_ui.py": "a37ad3f1980830f638e668acbc1d407227f73a4a2b74a859612dfcf0ac8fdebc",
+      "naia_screen_agent.js": "d21bf44c6700744842b98478cbff68e057296c7c50d6572c9b4c8555bc437f2b",
+      "naia_screen_service.py": "1704f4f4a7405067270cf830bf678a3330e37b4800171beb313a142838eff19d",
+      "naia_tools_ui.py": "76eb251d8e52993d6537e2f4f13bff549895d074948b0a07c087066c31c3a589",
       "vendor/html2canvas-1.4.1.min.js": "e87e550794322e574a1fda0c1549a3c70dae5a93d9113417a429016838eab8cb",
       "vendor/html2canvas-LICENSE.txt": "86200ce4e92d9a22c41c8647a55f7a5fddff304ff89b4d36ecc699ed8c123d2c"
     },
@@ -96,6 +96,6 @@
       ]
     }
   },
-  "sha256": "68b384f424717f899565bbd132fa86a1b3d9c64d1edc47604d22a7f53ebedd00",
-  "target_version": "0.2.2"
+  "sha256": "796e02a7226209580bab2f73716e604cef35da5ff13b0312a8268076d63a0609",
+  "target_version": "0.2.3"
 }

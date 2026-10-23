@@ -22,8 +22,8 @@ ALLOWED_IDS = frozenset({TARGET_ID}) | LEGACY_IDS
 MIN_VERSION = (0, 2, 1)
 MANIFEST_NAME = "release-manifest.json"
 ARCHIVE_NAME = "naia-repair-payload.zip"
-PAYLOAD_SHA256 = "68b384f424717f899565bbd132fa86a1b3d9c64d1edc47604d22a7f53ebedd00"
-MANIFEST_SHA256 = "4f1cd56e307fc7f721aa9cde03aef87c7ef1af1115f4b02c67d84ca633196ff4"
+PAYLOAD_SHA256 = "796e02a7226209580bab2f73716e604cef35da5ff13b0312a8268076d63a0609"
+MANIFEST_SHA256 = "7ab82992670f7646009e07902814e2e272fc06dd84f720cd36844094c192ab29"
 MAX_ARCHIVE = 4 * 1024 * 1024
 MAX_CONTENT = 12 * 1024 * 1024
 MAX_MANIFEST = 128 * 1024
@@ -507,7 +507,7 @@ def register(ctx):
             ctx.show_toast(str(error), level="error")
 
     ctx.register_panel([
-        {"key": "apply_repair", "type": "action", "scope": "global", "label": "내장 0.2.2 수정본 적용", "help": "오류가 난 도구의 소스만 교체합니다. 연결·설정 파일은 보존합니다."},
+        {"key": "apply_repair", "type": "action", "scope": "global", "label": "내장 0.2.3 수정본 적용", "help": "오류가 난 도구의 소스만 교체합니다. 연결·설정 파일은 보존합니다."},
         {"key": "reload_repaired", "type": "action", "scope": "global", "label": "수정한 확장 다시 불러오기", "help": "수정본과 일치하고 기존에 승인한 확장만 다시 불러옵니다. 꺼 두거나 차단한 확장은 켜지 않습니다."},
         {"key": "check_remote", "type": "action", "scope": "global", "label": "GitHub 최신 수정본 확인", "help": "정해진 수정본 저장소에서 파일을 확인합니다. 자동으로 적용하지 않습니다."},
         {"key": "apply_remote", "type": "action", "scope": "global", "label": "확인한 수정본 적용", "help": "10분 이내 확인한 수정본만 적용합니다. 완료 후 ‘수정한 확장 다시 불러오기’를 누르세요."},

@@ -1,3 +1,15 @@
+# 0.2.3 transport lifecycle fix — 2026-10-23
+
+The transport iframe is mounted outside the settings dialog. A separate lazy-loaded settings iframe cannot claim screen commands. Foreground parent messages drive polling and repeat readiness handshakes even when iframe timers are suspended; pageshow and visibility restoration wake the transport. No automatic page reload or credential/permission change occurs.
+
+State results report runtime_version, ready and busy; screen results report agent_version. The exact observed branded view-switch title is recognized while restricted handlers remain blocked.
+
+Passed: 85 Python tests (including executing the packaged parent/panel scripts with iframe timers suspended), 18 screen JavaScript tests. Device rendering/background behavior remains unverified. A page refresh after updating is still required to replace old injected code and its old local endpoint. This fixes a structural failure mode; it does not establish that every observed tablet failure had that cause.
+
+Payload SHA-256: `796e02a7226209580bab2f73716e604cef35da5ff13b0312a8268076d63a0609`.
+
+---
+
 # 0.2.2 navigation patch — 2026-10-23
 
 Scope: target-scoped DOM invalidation for UI actions; Android full/simple view switches, standard tab/disclosure navigation, and three existing viewer/menu handlers. Settings/auth, generation, file operations and edit permission guards remain in place.
