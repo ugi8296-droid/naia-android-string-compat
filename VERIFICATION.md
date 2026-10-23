@@ -1,3 +1,11 @@
+## 0.2.7 · 앱 안의 사진·폴더 보관함 검증
+
+- Python:135 tests passed. 실제 loopback HTTP 경로로 폴더 탐색→복수 이미지 가져오기→중복/실패 집계→목록→미리보기→PNG 원본 및 프롬프트 확인→재실행 후 목록 보존을 검증했습니다.
+- JavaScript:50 tests passed (기존 화면 연결35, 새 보관함 DOM/비동기 처리15). 버튼 교체, 복수 선택, 하위 폴더 옵션, 취소·재열기, 두 사진 비교, 명시적 히스토리 추가, 불확실한 업로드 재전송 차단을 검사했습니다.
+- 복구 패키지25 tests와 원본 extension manager 조합 재로드7 tests passed. 기존 연결·설정 파일 보존을 검사했습니다.
+- 원본 파일은 수정하지 않으며 가져온 파일은 별도 디스크 보관함에 저장합니다. 썸네일/미리보기는 필요할 때 만들어지며 이미지 디코딩은 한 번에 하나입니다.
+- 실제 Galaxy WebView와 기기 파일 접근 권한은 이 호스트 검사로 검증되지 않았습니다. Playwright 브라우저 실행 파일이 없어 실제 브라우저 시각 검사는 수행하지 못했고 DOM fixture와 JavaScript 구문 검사를 사용했습니다. 네이티브 SAF 권한 요청을 구현하거나 검증한 릴리스가 아닙니다.
+
 # 0.2.5 generic Web UI control — 2026-10-23
 
 User requested removal of Settings and per-feature restrictions. Screen+control now authorizes visible web controls including Settings, input, generation and file buttons. Direct API edit/generate tool permissions remain separate. Existing saved permission values and credentials are preserved. Secret field values remain redacted in observations and captures.
