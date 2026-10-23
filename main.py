@@ -111,6 +111,7 @@ def _retire_previous(ctx):
                 pass
         pending.extend(values.get(name) for name in ("previous_file", "previous_asset"))
         if (function.__name__ not in ("web_file", "web_asset")
+                or not isinstance(function.__module__, str)
                 or not owned_ui.fullmatch(function.__module__)
                 or Path(function.__code__.co_filename).resolve() != directory / "naia_tools_ui.py"):
             continue
