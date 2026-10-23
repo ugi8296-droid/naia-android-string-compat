@@ -1,8 +1,9 @@
 """NAIA v2.0.48 Android tools. Credentials stay in private app storage."""
 from __future__ import annotations
 import atexit
-import importlib
+import hashlib
 import importlib.util
+import inspect
 import json
 import os
 from pathlib import Path
@@ -16,21 +17,122 @@ RELAY_URL = "https://naia-tablet-link.ugi8296.chatgpt.site"
 DEFAULTS = {"low_memory": True, "cache_mb": 32, "plugin_enabled": False,
             "allow_read": True, "allow_screen": False, "allow_control": False,
             "allow_edit": False, "allow_generate": False}
-_PACKAGE = "_naia_android_tools_v1"
+_PACKAGE_PREFIX = "_naia_android_tools_runtime_"
+_CONTROLLER_ATTRIBUTE = "_naia_android_tools_controller"
+_MODULE_NAMES = ("naia_folder_open", "naia_artist_memory", "naia_device_bridge",
+                 "naia_tools_ui", "naia_screen_service")
+_RUNTIME_FILES = ("main.py", *(name + ".py" for name in _MODULE_NAMES),
+                  "android_tools_panel.html", "naia_screen_agent.js",
+                  "vendor/html2canvas-1.4.1.min.js")
 _controller = None
 
-def _module(name):
+def _runtime_package():
+    """Bind helpers to the bytes on disk, not a process-global version label.
+
+    NAIA retries replace the entry module but do not clear helper modules in
+    sys.modules. Android can also retain the Python process when its UI closes.
+    Read one complete bundle and give each changed bundle its own namespace.
+    """
     directory = Path(__file__).resolve().parent
-    package = sys.modules.get(_PACKAGE)
+    before = directory.stat()
+    digest = hashlib.sha256(str(directory).encode("utf-8"))
+    sources = {}
+    for filename in _RUNTIME_FILES:
+        content = (directory / filename).read_bytes()
+        digest.update(filename.encode("utf-8") + b"\0")
+        digest.update(len(content).to_bytes(8, "big"))
+        digest.update(content)
+        if filename.endswith(".py") and filename != "main.py":
+            sources[Path(filename).stem] = content
+    after = directory.stat()
+    if (before.st_dev, before.st_ino) != (after.st_dev, after.st_ino):
+        raise RuntimeError("Android 도구 파일 교체가 진행 중입니다. 완료 후 다시 활성화하세요.")
+    package_name = _PACKAGE_PREFIX + digest.hexdigest()
+    package = sys.modules.get(package_name)
     if package is None:
-        package = types.ModuleType(_PACKAGE)
+        package = types.ModuleType(package_name)
         package.__path__ = [str(directory)]
-        package.__package__ = _PACKAGE
-        package.__spec__ = importlib.util.spec_from_loader(_PACKAGE, loader=None, is_package=True)
-        sys.modules[_PACKAGE] = package
-    elif Path(package.__path__[0]).resolve() != directory:
-        raise RuntimeError("Android 도구의 이전 실행부가 남아 있습니다. 앱을 다시 시작하세요.")
-    return importlib.import_module(f"{_PACKAGE}.{name}")
+        package.__package__ = package_name
+        package.__spec__ = importlib.util.spec_from_loader(package_name, loader=None, is_package=True)
+        package._naia_sources = sources
+        package._naia_load_lock = threading.RLock()
+        sys.modules[package_name] = package
+    return package
+
+def _module(name, package=None):
+    if name not in _MODULE_NAMES:
+        raise ValueError("지원하지 않는 Android 도구 모듈입니다.")
+    package = package or _runtime_package()
+    fullname = package.__name__ + "." + name
+    with package._naia_load_lock:
+        module = sys.modules.get(fullname)
+        if module is not None:
+            return module
+        path = Path(package.__path__[0]) / (name + ".py")
+        spec = importlib.util.spec_from_file_location(fullname, path)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[fullname] = module
+        try:
+            # Explicit compilation bypasses stale timestamp/size based .pyc
+            # caches as well as cached modules from a previous extension load.
+            exec(compile(package._naia_sources[name], str(path), "exec"), module.__dict__)
+        except BaseException:
+            if sys.modules.get(fullname) is module:
+                del sys.modules[fullname]
+            raise
+        setattr(package, name, module)
+        return module
+
+def _retire_previous(ctx):
+    """Stop our old owner even when a pre-0.2.1 entry has been overwritten.
+
+    Old releases did not store a controller on the app. Their live web wrapper
+    still owns the PanelServer, which owns that controller. Follow only the
+    audited serving-chain links and verify the app, installation and types;
+    never inspect or close unrelated extension resources.
+    """
+    directory = Path(__file__).resolve().parent
+    app = ctx._app_context
+    candidates = [_controller, getattr(app, _CONTROLLER_ATTRIBUTE, None)]
+    shell = sys.modules.get("app.backend.server.web_shell_routes")
+    pending = [getattr(shell, name, None) for name in ("_web_file", "_web_asset")]
+    visited = set()
+    owned_ui = re.compile(r"(?:_naia_android_tools_v1|_naia_android_tools_runtime_[0-9a-f]{64})\.naia_tools_ui\Z")
+    while pending and len(visited) < 128:
+        function = pending.pop()
+        if not isinstance(function, types.FunctionType) or id(function) in visited:
+            continue
+        visited.add(id(function))
+        values = {}
+        for name, cell in zip(function.__code__.co_freevars, function.__closure__ or ()):
+            try:
+                values[name] = cell.cell_contents
+            except ValueError:
+                pass
+        pending.extend(values.get(name) for name in ("previous_file", "previous_asset"))
+        if (function.__name__ not in ("web_file", "web_asset")
+                or not owned_ui.fullmatch(function.__module__)
+                or Path(function.__code__.co_filename).resolve() != directory / "naia_tools_ui.py"):
+            continue
+        server = values.get("server")
+        if type(server).__name__ == "PanelServer" and type(server).__module__ == function.__module__:
+            candidates.append(getattr(server, "controller", None))
+    closed = set()
+    for controller in candidates:
+        if controller is None or id(controller) in closed:
+            continue
+        context = getattr(controller, "ctx", None)
+        if context is None or getattr(context, "_app_context", None) is not app:
+            continue
+        ext_dir = getattr(context, "ext_dir", None)
+        if ext_dir is None or Path(ext_dir).resolve() != directory:
+            raise RuntimeError("이전 Android 도구의 설치 위치가 달라 안전하게 중지하지 못했습니다.")
+        close = getattr(controller, "close", None)
+        if not callable(close):
+            raise RuntimeError("이전 Android 도구 실행부를 안전하게 중지하지 못했습니다.")
+        close()
+        atexit.unregister(close)
+        closed.add(id(controller))
 
 def _private_directory(ctx):
     config = getattr(getattr(ctx._app_context, "runtime_paths", None), "config_dir", None)
@@ -205,14 +307,21 @@ class Controller:
                 pass
         if self.memory:
             self.memory.close()
+        app = self.ctx._app_context
+        if getattr(app, _CONTROLLER_ATTRIBUTE, None) is self:
+            delattr(app, _CONTROLLER_ATTRIBUTE)
+        atexit.unregister(self.close)
 
 def register(ctx):
     global _controller
-    if _controller:
-        _controller.close()
-        _controller = None
-    folder, memory, bridge, ui, screen = [_module(n) for n in
-        ("naia_folder_open", "naia_artist_memory", "naia_device_bridge", "naia_tools_ui", "naia_screen_service")]
+    # The host creates a fresh main.py module on retry, so its _controller global
+    # alone cannot find the previous owner. Keep one owner on the live app too.
+    _retire_previous(ctx)
+    _controller = None
+    package = _runtime_package()
+    folder, memory, bridge, ui, screen = [_module(n, package) for n in _MODULE_NAMES]
+    if "screen_service" not in inspect.signature(bridge.DeviceBridge).parameters:
+        raise RuntimeError("Android 도구의 실행 파일 버전이 일치하지 않습니다. 복구 업데이트가 필요합니다.")
     controller = Controller(ctx, _private_directory(ctx), folder)
     try:
         controller.memory = memory.install(controller.memory_settings, state_root=controller.state_root)
@@ -226,12 +335,13 @@ def register(ctx):
         controller._cleanup.append(handle if callable(handle) else handle.close)
         ctx.register_panel([{"key": "help", "type": "action", "label": "Android 도구 설정 안내",
             "help": "Settings → Global → Android 도구 · 플러그인에서 설정합니다."}],
-            title="Android 도구 0.2.0", on_action=lambda key: ctx.show_toast(
+            title="Android 도구 0.2.1", on_action=lambda key: ctx.show_toast(
                 "화면 새로고침 후 Settings → Global → Android 도구 · 플러그인을 여세요.") if key == "help" else None)
         controller.bridge.start()
     except BaseException:
         controller.close()
         raise
     _controller = controller
+    setattr(ctx._app_context, _CONTROLLER_ATTRIBUTE, controller)
     atexit.register(controller.close)
     ctx.log("Android 도구가 준비되었습니다. 화면을 새로고침하세요. 플러그인 연결은 설정에서 시작합니다.")

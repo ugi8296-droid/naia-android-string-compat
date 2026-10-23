@@ -1,4 +1,4 @@
-# NAIA Android 도구 0.2.0
+# NAIA Android 도구 0.2.1
 
 NAIA v2.0.48 Android 앱용 확장입니다. APK 재설치나 Termux가 필요하지 않습니다.
 
@@ -6,7 +6,9 @@ NAIA v2.0.48 Android 앱용 확장입니다. APK 재설치나 Termux가 필요�
 
 처음 설치하는 경우 Settings → Extension → GitHub에서 설치에 주소를 넣고 확장을 활성화한 뒤 작동 스위치(Activate This Script)를 켭니다. 앱을 완전히 종료하고 다시 실행하세요. Settings → Global → **Android 도구 · 플러그인**에 설정이 생깁니다. 기존 문자 호환, ChatGPT 연결, 저장 폴더 선택 확장은 유지합니다.
 
-**0.1.0이 이미 설치된 경우** 같은 주소로 다시 설치하지 마세요. 원본 v2.0.48 설치기는 같은 확장 ID의 덮어쓰기를 거절합니다. 전용 업데이트 확장 `https://github.com/ugi8296-droid/naia-android-string-compat/tree/android-tools-update`의 안내를 따르세요. 기존 연결 파일과 설정을 보존하며 새 화면 권한은 꺼진 상태로 시작합니다.
+**0.1.0 또는 0.2.0이 이미 설치된 경우** 같은 주소로 다시 설치하지 마세요. 원본 v2.0.48 설치기는 같은 확장 ID의 덮어쓰기를 거절합니다. 복구 확장 `https://github.com/ugi8296-droid/naia-android-string-compat/tree/android-tools-repair`의 안내를 따르세요. 기존 연결 파일과 설정을 보존합니다. 기존 0.2.0 업데이트 확장에 다시 설치를 요청하지 않아도 됩니다.
+
+0.2.1에서는 확장을 재시도할 때 이전 Python 모듈이 남아 `screen_service` 인자를 거부하던 문제를 수정했습니다. 실행 파일의 실제 내용으로 모듈을 구분하고, 이전 실행부를 종료한 뒤 새 실행부를 연결합니다. 복구 확장은 설치된 GPT 연결·저장 폴더 확장의 알려진 중복 등록·중복 화면 패치 문제도 함께 교정합니다.
 
 ## 작가 썸네일
 
