@@ -1,348 +1,514 @@
-"""NAIA v2.0.48 Android tools. Credentials stay in private app storage."""
+"""Explicit repair of fixed NAIA extensions, preserving existing permission choices."""
 from __future__ import annotations
-import atexit
+
 import hashlib
 import importlib.util
-import inspect
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
-import subprocess
+import shutil
+import stat
 import sys
 import threading
-import types
+import time
+import zipfile
+import io
 
-RELAY_URL = "https://naia-tablet-link.ugi8296.chatgpt.site"
-DEFAULTS = {"low_memory": True, "cache_mb": 32, "plugin_enabled": False,
-            "allow_read": True, "allow_screen": False, "allow_control": False,
-            "allow_edit": False, "allow_generate": False}
-_PACKAGE_PREFIX = "_naia_android_tools_runtime_"
-_CONTROLLER_ATTRIBUTE = "_naia_android_tools_controller"
-_MODULE_NAMES = ("naia_folder_open", "naia_artist_memory", "naia_device_bridge",
-                 "naia_tools_ui", "naia_screen_service")
-_RUNTIME_FILES = ("main.py", *(name + ".py" for name in _MODULE_NAMES),
-                  "android_tools_panel.html", "naia_screen_agent.js",
-                  "vendor/html2canvas-1.4.1.min.js")
-_controller = None
+TARGET_ID = "naia_zz_android_tools_v1"
+REPAIR_ID = "naia_android_tools_repair"
+LEGACY_IDS = frozenset({"naia_chatgpt_connect_v2", "naia_storage_picker_v1"})
+ALLOWED_IDS = frozenset({TARGET_ID}) | LEGACY_IDS
+MIN_VERSION = (0, 2, 1)
+MANIFEST_NAME = "release-manifest.json"
+ARCHIVE_NAME = "naia-repair-payload.zip"
+PAYLOAD_SHA256 = "c1ea165ce262cb44dd8138d95df2bfe1077c1f88a58e9c98526f7a19c83ad1c1"
+MANIFEST_SHA256 = "75cb7727a830ef5f614e12c5a7357aa32f08c16965c4e4b53016455716c1aaac"
+MAX_ARCHIVE = 4 * 1024 * 1024
+MAX_CONTENT = 12 * 1024 * 1024
+MAX_MANIFEST = 128 * 1024
+MAX_CONFIG = 256 * 1024
+MAX_FILES = 200
+_HASH = re.compile(r"^[0-9a-f]{64}$")
+_operation = threading.Lock()
+_checked_release = None
+_checked_at = 0.0
+_last_changed_ids = []
+_last_verified_files = {}
+_action_thread = None
+_action_lock = threading.Lock()
 
-def _runtime_package():
-    """Bind helpers to the bytes on disk, not a process-global version label.
 
-    NAIA retries replace the entry module but do not clear helper modules in
-    sys.modules. Android can also retain the Python process when its UI closes.
-    Read one complete bundle and give each changed bundle its own namespace.
-    """
-    directory = Path(__file__).resolve().parent
-    before = directory.stat()
-    digest = hashlib.sha256(str(directory).encode("utf-8"))
-    sources = {}
-    for filename in _RUNTIME_FILES:
-        content = (directory / filename).read_bytes()
-        digest.update(filename.encode("utf-8") + b"\0")
-        digest.update(len(content).to_bytes(8, "big"))
-        digest.update(content)
-        if filename.endswith(".py") and filename != "main.py":
-            sources[Path(filename).stem] = content
-    after = directory.stat()
-    if (before.st_dev, before.st_ino) != (after.st_dev, after.st_ino):
-        raise RuntimeError("Android 도구 파일 교체가 진행 중입니다. 완료 후 다시 활성화하세요.")
-    package_name = _PACKAGE_PREFIX + digest.hexdigest()
-    package = sys.modules.get(package_name)
-    if package is None:
-        package = types.ModuleType(package_name)
-        package.__path__ = [str(directory)]
-        package.__package__ = package_name
-        package.__spec__ = importlib.util.spec_from_loader(package_name, loader=None, is_package=True)
-        package._naia_sources = sources
-        package._naia_load_lock = threading.RLock()
-        sys.modules[package_name] = package
-    return package
+class RepairError(Exception):
+    pass
 
-def _module(name, package=None):
-    if name not in _MODULE_NAMES:
-        raise ValueError("지원하지 않는 Android 도구 모듈입니다.")
-    package = package or _runtime_package()
-    fullname = package.__name__ + "." + name
-    with package._naia_load_lock:
-        module = sys.modules.get(fullname)
-        if module is not None:
-            return module
-        path = Path(package.__path__[0]) / (name + ".py")
-        spec = importlib.util.spec_from_file_location(fullname, path)
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[fullname] = module
-        try:
-            # Explicit compilation bypasses stale timestamp/size based .pyc
-            # caches as well as cached modules from a previous extension load.
-            exec(compile(package._naia_sources[name], str(path), "exec"), module.__dict__)
-        except BaseException:
-            if sys.modules.get(fullname) is module:
-                del sys.modules[fullname]
-            raise
-        setattr(package, name, module)
-        return module
 
-def _retire_previous(ctx):
-    """Stop our old owner even when a pre-0.2.1 entry has been overwritten.
+def _safe_path(path):
+    path = Path(os.path.abspath(path))
+    if any(item.is_symlink() for item in (path, *path.parents)):
+        raise RepairError("링크가 있는 경로는 수정하지 않습니다.")
+    return path
 
-    Old releases did not store a controller on the app. Their live web wrapper
-    still owns the PanelServer, which owns that controller. Follow only the
-    audited serving-chain links and verify the app, installation and types;
-    never inspect or close unrelated extension resources.
-    """
-    directory = Path(__file__).resolve().parent
+
+def _version(value):
+    if not isinstance(value, str) or not re.fullmatch(r"\d{1,4}\.\d{1,4}\.\d{1,4}", value):
+        raise RepairError("수정본 버전 형식이 올바르지 않습니다.")
+    return tuple(map(int, value.split(".")))
+
+
+def _json_bytes(raw, maximum=MAX_CONFIG):
+    if not isinstance(raw, bytes) or len(raw) > maximum:
+        raise RepairError("설정 또는 수정본 크기가 올바르지 않습니다.")
+    try:
+        value = json.loads(raw)
+    except (ValueError, UnicodeError, RecursionError):
+        raise RepairError("설정 또는 수정본 형식이 올바르지 않습니다.") from None
+    if not isinstance(value, dict):
+        raise RepairError("설정 또는 수정본 형식이 올바르지 않습니다.")
+    return value
+
+
+def _read(path, maximum):
+    path = _safe_path(path)
+    if not path.is_file() or path.stat().st_size > maximum:
+        raise RepairError("필요한 파일을 안전하게 읽을 수 없습니다.")
+    return path.read_bytes()
+
+
+def _write(path, raw):
+    path = _safe_path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("wb") as stream:
+        stream.write(raw)
+        stream.flush()
+        os.fsync(stream.fileno())
+    path.chmod(0o600)
+
+
+def _atomic_json(path, value):
+    temporary = path.with_name(path.name + ".repair.tmp")
+    _write(temporary, json.dumps(value, ensure_ascii=False, indent=2, allow_nan=False).encode())
+    os.replace(temporary, path)
+
+
+def _code_path(name):
+    if not isinstance(name, str) or len(name) > 180 or "\\" in name:
+        raise RepairError("수정본 파일 경로가 올바르지 않습니다.")
+    path = PurePosixPath(name)
+    if (path.is_absolute() or str(path) != name or any(p.startswith(".") for p in path.parts)
+            or not path.parts or name == "settings.json" or len(path.parts) > 4):
+        raise RepairError("설정 파일 또는 안전하지 않은 경로는 덮어쓰지 않습니다.")
+    if path.suffix.lower() not in {".py", ".js", ".mjs", ".css", ".html", ".json", ".md", ".txt"} and name != "LICENSE":
+        raise RepairError("지원하지 않는 수정본 파일입니다.")
+    return name
+
+
+def _hash(value):
+    if not isinstance(value, str) or not _HASH.fullmatch(value):
+        raise RepairError("수정본 해시 형식이 올바르지 않습니다.")
+    return value
+
+
+def _identity(meta, ext_id):
+    return (meta.get("id") == ext_id and meta.get("entry", "main.py") == "main.py"
+            and meta.get("naia_ext_api") == 1)
+
+
+def validate_release(release):
+    """Validate bytes from the pinned bundle or fixed-repository downloader."""
+    if not isinstance(release, dict) or set(release) - {"manifest_bytes", "archive_bytes", "source_commit"}:
+        raise RepairError("수정본 전달 형식이 올바르지 않습니다.")
+    commit = release.get("source_commit")
+    if commit is not None and (not isinstance(commit, str) or not re.fullmatch(r"[0-9a-f]{40}", commit)):
+        raise RepairError("수정본 커밋을 확인할 수 없습니다.")
+    meta = _json_bytes(release.get("manifest_bytes"), MAX_MANIFEST)
+    if set(meta) != {"format", "target_version", "archive", "sha256", "main", "repairs"} or type(meta["format"]) is not int or meta["format"] != 1:
+        raise RepairError("지원하지 않는 수정본 형식입니다.")
+    if _version(meta["target_version"]) < MIN_VERSION or meta["archive"] != ARCHIVE_NAME:
+        raise RepairError("이전 버전의 수정본은 적용하지 않습니다.")
+    archive = release.get("archive_bytes")
+    if not isinstance(archive, bytes) or len(archive) > MAX_ARCHIVE or hashlib.sha256(archive).hexdigest() != _hash(meta["sha256"]):
+        raise RepairError("수정본 묶음 해시가 일치하지 않습니다.")
+    base = meta["main"]
+    if (not isinstance(base, dict) or set(base) != {"id", "files"} or base["id"] != TARGET_ID
+            or not isinstance(base["files"], dict) or not {"main.py", "extension.json"} <= base["files"].keys()):
+        raise RepairError("Android 도구 수정본을 확인할 수 없습니다.")
+    expected = {"main/" + _code_path(name): _hash(digest) for name, digest in base["files"].items()}
+    repairs = meta["repairs"]
+    if not isinstance(repairs, dict) or set(repairs) - LEGACY_IDS:
+        raise RepairError("허용되지 않은 확장 수정 요청입니다.")
+    for ext_id, repair in repairs.items():
+        if (not isinstance(repair, dict) or set(repair) != {"from_versions", "files"}
+                or not isinstance(repair["from_versions"], list) or not 1 <= len(repair["from_versions"]) <= 8
+                or not isinstance(repair["files"], dict) or not {"main.py", "extension.json"} <= repair["files"].keys()):
+            raise RepairError("추가 확장 수정본 형식이 올바르지 않습니다.")
+        for version in repair["from_versions"]:
+            _version(version)
+        for name, descriptor in repair["files"].items():
+            _code_path(name)
+            if (not isinstance(descriptor, dict) or set(descriptor) != {"from_sha256", "sha256"}
+                    or not isinstance(descriptor["from_sha256"], list) or not 1 <= len(descriptor["from_sha256"]) <= 8):
+                raise RepairError("추가 확장 원본 해시가 올바르지 않습니다.")
+            for digest in descriptor["from_sha256"]:
+                _hash(digest)
+            expected["repairs/" + ext_id + "/" + name] = _hash(descriptor["sha256"])
+    if not 1 <= len(expected) <= MAX_FILES:
+        raise RepairError("수정본 파일 수가 너무 많습니다.")
+    contents = {}
+    try:
+        with zipfile.ZipFile(io.BytesIO(archive)) as zipped:
+            infos = zipped.infolist()
+            if len(infos) != len(expected) or {entry.filename for entry in infos} != set(expected):
+                raise RepairError("수정본 파일 목록이 일치하지 않습니다.")
+            if sum(entry.file_size for entry in infos) > MAX_CONTENT:
+                raise RepairError("수정본 압축 해제 크기가 너무 큽니다.")
+            for entry in infos:
+                if stat.S_IFMT(entry.external_attr >> 16) not in (0, stat.S_IFREG) or entry.is_dir():
+                    raise RepairError("수정본에 지원하지 않는 파일이 있습니다.")
+                content = zipped.read(entry)
+                if hashlib.sha256(content).hexdigest() != expected[entry.filename]:
+                    raise RepairError("수정본 파일 해시가 일치하지 않습니다.")
+                contents[entry.filename] = content
+    except (zipfile.BadZipFile, RuntimeError, OSError):
+        raise RepairError("수정본 압축 파일을 읽지 못했습니다.") from None
+    base_meta = _json_bytes(contents["main/extension.json"])
+    if not _identity(base_meta, TARGET_ID) or base_meta.get("version") != meta["target_version"]:
+        raise RepairError("Android 도구 ID 또는 버전이 일치하지 않습니다.")
+    for ext_id in repairs:
+        extension = _json_bytes(contents["repairs/" + ext_id + "/extension.json"])
+        if not _identity(extension, ext_id):
+            raise RepairError("추가 확장 ID가 일치하지 않습니다.")
+        _version(extension.get("version"))
+    return meta, contents
+
+
+def _bundle(directory):
+    manifest = _read(directory / MANIFEST_NAME, MAX_MANIFEST)
+    archive = _read(directory / ARCHIVE_NAME, MAX_ARCHIVE)
+    if hashlib.sha256(manifest).hexdigest() != MANIFEST_SHA256 or hashlib.sha256(archive).hexdigest() != PAYLOAD_SHA256:
+        raise RepairError("내장 수정본이 검증한 파일과 다릅니다.")
+    return {"manifest_bytes": manifest, "archive_bytes": archive}
+
+
+def _check_tree(directory):
+    total = 0
+    for parent, dirs, files in os.walk(directory, followlinks=False):
+        for name in [*dirs, *files]:
+            item = _safe_path(Path(parent) / name)
+            if not item.is_file() and not item.is_dir():
+                raise RepairError("지원하지 않는 기존 파일이 있습니다.")
+            if item.is_file():
+                total += item.stat().st_size
+                if total > MAX_CONTENT:
+                    raise RepairError("기존 확장 파일이 예상한 크기를 초과합니다.")
+
+
+def _require_active(ctx):
+    r = ctx._record
+    if not (r.status == "loaded" and r.approved and r.enabled and r.armed and not r.blocked):
+        raise RepairError("복구 도구를 신뢰하고 활성화한 뒤 눌러 주세요.")
+
+
+def _same_files(target, files):
+    return all(_safe_path(target / name).is_file() and (target / name).read_bytes() == content for name, content in files.items())
+
+
+def _recover(root, transaction):
+    if not transaction.exists():
+        return
+    _check_tree(transaction)
+    plan_path = transaction / "plan.json"
+    if not plan_path.exists():
+        shutil.rmtree(transaction)
+        return
+    plan = _json_bytes(_read(plan_path, MAX_CONFIG))
+    ids = plan.get("ids")
+    if not isinstance(ids, list) or not all(isinstance(item, str) for item in ids) or len(ids) != len(set(ids)) or set(ids) - ALLOWED_IDS:
+        raise RepairError("중단된 복구 기록을 확인할 수 없습니다.")
+    if (transaction / "committed.json").exists():
+        committed = _json_bytes(_read(transaction / "committed.json", MAX_CONFIG))
+        if committed != {"ids": ids}:
+            raise RepairError("완료된 복구 기록을 확인할 수 없습니다.")
+        _cleanup_transaction(transaction)
+        return
+    for ext_id in reversed(ids):
+        previous = transaction / "previous" / ext_id
+        if not previous.exists():
+            continue
+        if not _identity(_json_bytes(_read(previous / "extension.json", MAX_CONFIG)), ext_id):
+            raise RepairError("중단된 복구의 원본 ID가 다릅니다.")
+        target = _safe_path(root / ext_id)
+        if target.exists():
+            failed = transaction / "failed" / ext_id
+            failed.parent.mkdir(parents=True, exist_ok=True)
+            if failed.exists():
+                raise RepairError("중단된 복구 파일이 겹칩니다. 기존 파일을 유지했습니다.")
+            os.replace(target, failed)
+        os.replace(previous, target)
+    shutil.rmtree(transaction)
+
+
+def _cleanup_transaction(transaction):
+    # Never partially delete a transaction that recovery could mistake for an
+    # interrupted swap. Retire its name atomically before best-effort cleanup.
+    retired = transaction.with_name(".android-tools-repair-cleanup-" + str(time.time_ns()))
+    os.replace(transaction, retired)
+    shutil.rmtree(retired, ignore_errors=True)
+
+
+def perform_update(ctx, *, release=None):
+    _require_active(ctx)
+    if not _operation.acquire(blocking=False):
+        raise RepairError("이미 복구 중입니다.")
+    try:
+        return _perform_update(ctx, release)
+    finally:
+        _operation.release()
+
+
+def _perform_update(ctx, release):
+    global _last_changed_ids, _last_verified_files
     app = ctx._app_context
-    candidates = [_controller, getattr(app, _CONTROLLER_ATTRIBUTE, None)]
-    shell = sys.modules.get("app.backend.server.web_shell_routes")
-    pending = [getattr(shell, name, None) for name in ("_web_file", "_web_asset")]
-    visited = set()
-    owned_ui = re.compile(r"(?:_naia_android_tools_v1|_naia_android_tools_runtime_[0-9a-f]{64})\.naia_tools_ui\Z")
-    while pending and len(visited) < 128:
-        function = pending.pop()
-        if not isinstance(function, types.FunctionType) or id(function) in visited:
+    manager = getattr(app, "extension_manager", None)
+    paths = getattr(app, "runtime_paths", None)
+    if manager is None or paths is None or not callable(getattr(manager, "extensions_root", None)):
+        raise RepairError("지원하는 확장 관리자를 찾을 수 없습니다.")
+    root = _safe_path(manager.extensions_root())
+    directory = _safe_path(ctx.ext_dir)
+    if directory != root / REPAIR_ID or not root.is_dir():
+        raise RepairError("복구 도구의 설치 위치가 올바르지 않습니다.")
+    if bool(getattr(app, "is_generating", False) or getattr(app, "headless_generation_runner_active", False)):
+        raise RepairError("이미지 생성이 끝난 뒤 복구해 주세요.")
+    meta, contents = validate_release(_bundle(directory) if release is None else release)
+    config_path = _safe_path(Path(paths.config_dir) / "extensions.json")
+    backup_root = _safe_path(Path(paths.config_dir) / "android-tools" / "repair-backups")
+    if backup_root.is_relative_to(root) or root.is_relative_to(backup_root):
+        raise RepairError("안전한 백업 위치를 확인할 수 없습니다.")
+    transaction = _safe_path(root / ".android-tools-repair")
+    _recover(root, transaction)
+    plans, skipped, verified = [], [], {}
+    targets = {TARGET_ID: {name: contents["main/" + name] for name in meta["main"]["files"]}}
+    for ext_id, repair in meta["repairs"].items():
+        targets[ext_id] = {name: contents["repairs/" + ext_id + "/" + name] for name in repair["files"]}
+    for ext_id, files in targets.items():
+        target = _safe_path(root / ext_id)
+        if not target.exists():
+            if ext_id == TARGET_ID:
+                raise RepairError("기존 Android 도구가 설치되어 있지 않습니다.")
+            skipped.append({"id": ext_id, "reason": "not_installed"})
             continue
-        visited.add(id(function))
-        values = {}
-        for name, cell in zip(function.__code__.co_freevars, function.__closure__ or ()):
-            try:
-                values[name] = cell.cell_contents
-            except ValueError:
-                pass
-        pending.extend(values.get(name) for name in ("previous_file", "previous_asset"))
-        if (function.__name__ not in ("web_file", "web_asset")
-                or not isinstance(function.__module__, str)
-                or not owned_ui.fullmatch(function.__module__)
-                or Path(function.__code__.co_filename).resolve() != directory / "naia_tools_ui.py"):
+        _check_tree(target)
+        installed = _json_bytes(_read(target / "extension.json", MAX_CONFIG))
+        if not _identity(installed, ext_id):
+            raise RepairError("기존 확장의 ID가 설치 위치와 다릅니다.")
+        if ext_id == TARGET_ID:
+            version = _version(installed.get("version"))
+            if version < (0, 1, 0) or version > _version(meta["target_version"]):
+                raise RepairError("이전 버전으로 바꾸거나 알 수 없는 버전을 교체하지 않습니다.")
+        record = next((r for r in manager.records if r.ext_id == ext_id), None)
+        if record is None or _safe_path(record.directory) != target:
+            raise RepairError("기존 확장의 실행 정보가 설치 위치와 다릅니다.")
+        if _same_files(target, files):
+            verified[ext_id] = {name: hashlib.sha256(content).hexdigest() for name, content in files.items()}
             continue
-        server = values.get("server")
-        if type(server).__name__ == "PanelServer" and type(server).__module__ == function.__module__:
-            candidates.append(getattr(server, "controller", None))
-    closed = set()
-    for controller in candidates:
-        if controller is None or id(controller) in closed:
-            continue
-        context = getattr(controller, "ctx", None)
-        if context is None or getattr(context, "_app_context", None) is not app:
-            continue
-        ext_dir = getattr(context, "ext_dir", None)
-        if ext_dir is None or Path(ext_dir).resolve() != directory:
-            raise RuntimeError("이전 Android 도구의 설치 위치가 달라 안전하게 중지하지 못했습니다.")
-        close = getattr(controller, "close", None)
-        if not callable(close):
-            raise RuntimeError("이전 Android 도구 실행부를 안전하게 중지하지 못했습니다.")
-        close()
-        atexit.unregister(close)
-        closed.add(id(controller))
-
-def _private_directory(ctx):
-    config = getattr(getattr(ctx._app_context, "runtime_paths", None), "config_dir", None)
-    if config is None:
-        raise RuntimeError("앱 전용 설정 폴더를 확인할 수 없습니다.")
-    directory = (Path(config) / "android-tools").resolve()
-    if hasattr(sys, "getandroidapilevel") and not re.match(
-        r"^/data/(?:user(?:_de)?/\d+|data)/[^/]+/(?:files|no_backup)/", str(directory)):
-        raise RuntimeError("연결 정보를 저장할 Android 앱 전용 폴더가 필요합니다.")
-    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
-    directory.chmod(0o700)
-    return directory
-
-def _pairing(data):
-    if not isinstance(data, dict) or not isinstance(data.get("relay_url"), str) or data["relay_url"].rstrip("/") != RELAY_URL:
-        raise ValueError("NAIA 연결 페이지에서 받은 연결 파일을 선택하세요.")
-    result = {"relay_url": RELAY_URL}
-    for key in ("relay_access_token", "device_id", "device_token"):
-        value = data.get(key)
-        if not isinstance(value, str) or not value.strip() or len(value) > 8192 or any(c in value for c in "\r\n\0"):
-            raise ValueError("연결 파일 형식이 올바르지 않습니다.")
-        result[key] = value.strip()
-    if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", result["device_id"]):
-        raise ValueError("연결 파일의 기기 정보가 올바르지 않습니다.")
-    return result
-
-class Controller:
-    def __init__(self, ctx, state_root, folder_module):
-        self.ctx, self.state_root, self.folder_module = ctx, Path(state_root), folder_module
-        self.pair_path = self.state_root / "pairing.json"
-        self._lock, self._closed, self._cleanup = threading.RLock(), False, []
-        self.memory, self.bridge, self.screen, self._pair = None, None, None, None
+        if ext_id in LEGACY_IDS:
+            spec = meta["repairs"][ext_id]
+            source_matches = installed.get("version") in spec["from_versions"]
+            for name, descriptor in spec["files"].items():
+                source = _safe_path(target / name)
+                source_matches = source_matches and source.is_file() and hashlib.sha256(source.read_bytes()).hexdigest() in descriptor["from_sha256"]
+            if not source_matches:
+                skipped.append({"id": ext_id, "reason": "source_changed"})
+                continue
+        plans.append({"id": ext_id, "target": target, "files": files, "record": record})
+    if not plans:
+        _last_changed_ids, _last_verified_files = sorted(verified), verified
+        return {"updated": False, "already_updated": True, "version": meta["target_version"], "skipped": skipped,
+                "reload_ids": sorted(verified), "restart_required": True, "reapproval_required": False}
+    config = _json_bytes(_read(config_path, MAX_CONFIG))
+    if not isinstance(config.get("approved"), list):
+        raise RepairError("기존 확장 승인 정보를 확인할 수 없습니다.")
+    backup = _safe_path(backup_root / str(time.time_ns()))
+    backup.mkdir(mode=0o700, parents=True)
+    _atomic_json(backup / "extensions-before.json", config)
+    transaction.mkdir()
+    _atomic_json(transaction / "plan.json", {"ids": [plan["id"] for plan in plans]})
+    for plan in plans:
+        shutil.copytree(plan["target"], backup / plan["id"], ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+    ids = {plan["id"] for plan in plans}
+    stopped = False
+    try:
+        with manager._lock:
+            _require_active(ctx)
+            for plan in plans:
+                record = plan["record"]
+                record.status = "error"
+                record.error = "수정본 적용 중입니다. 완료 후 ‘수정한 확장 다시 불러오기’를 누르세요."
+            # The runtime gates callbacks on loaded status. Keep all persisted
+            # approval/enabled/armed/blocked choices; normal restart loads only
+            # extensions the user had already approved.
+            stopped = True
+        for plan in plans:
+            module = sys.modules.get("naia_ext_" + plan["id"])
+            controller = getattr(module, "_controller", None)
+            if controller is not None and callable(getattr(controller, "close", None)):
+                controller_dir = getattr(getattr(controller, "ctx", None), "ext_dir", None)
+                if controller_dir is not None and _safe_path(controller_dir) == plan["target"]:
+                    controller.close()
+            stage = transaction / "new" / plan["id"]
+            # Preserve every existing data/settings file. Only reviewed source
+            # files are overwritten; no OAuth or pairing files are enumerated.
+            shutil.copytree(plan["target"], stage, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+            for name, content in plan["files"].items():
+                _write(stage / name, content)
+        for plan in plans:
+            previous = transaction / "previous" / plan["id"]
+            previous.parent.mkdir(parents=True, exist_ok=True)
+            os.replace(plan["target"], previous)
+            os.replace(transaction / "new" / plan["id"], plan["target"])
+        _atomic_json(backup / "completed.json", {"version": meta["target_version"], "ids": sorted(ids)})
+        _atomic_json(transaction / "committed.json", {"ids": [plan["id"] for plan in plans]})
+    except BaseException as error:
         try:
-            if self.pair_path.stat().st_size <= 32768:
-                self._pair = _pairing(json.loads(self.pair_path.read_text(encoding="utf-8")))
-        except (OSError, ValueError, TypeError):
-            pass
+            _recover(root, transaction)
+        except Exception:
+            raise RepairError("복구가 중단되어 백업을 보존했습니다. 추가 설치 없이 진단을 요청해 주세요.") from None
+        if stopped:
+            raise RepairError("복구에 실패해 기존 파일을 유지했습니다. 추가 설치 없이 오류를 확인해 주세요.") from error
+        raise
+    _cleanup_transaction(transaction)
+    for plan in plans:
+        verified[plan["id"]] = {name: hashlib.sha256(content).hexdigest() for name, content in plan["files"].items()}
+    _last_changed_ids, _last_verified_files = sorted(verified), verified
+    for plan in plans:
+        plan["record"].error = "수정본을 적용했습니다. ‘수정한 확장 다시 불러오기’를 눌러 실행 결과를 확인하세요."
+    return {"updated": True, "already_updated": False, "version": meta["target_version"],
+            "updated_ids": sorted(ids), "reload_ids": sorted(verified), "skipped": skipped,
+            "restart_required": True, "reapproval_required": False}
 
-    def available(self):
-        r = self.ctx._record
-        return bool(not self._closed and r.status == "loaded" and r.enabled and not r.blocked)
 
-    def active(self):
-        return bool(self.available() and self.ctx._record.armed)
+def _download():
+    path = Path(__file__).with_name("naia_repair_download.py")
+    spec = importlib.util.spec_from_file_location("_naia_repair_download", path)
+    module = importlib.util.module_from_spec(spec)
+    # Read source directly; a repair must not reuse stale timestamp bytecode.
+    exec(compile(path.read_bytes(), str(path), "exec"), module.__dict__)
+    try:
+        return module.fetch_release()
+    except module.DownloadError as error:
+        raise RepairError(str(error)) from None
 
-    def require_available(self):
-        if not self.available():
-            raise ValueError("Settings → Extension에서 Android 도구를 활성화하세요.")
 
-    def settings(self):
-        raw = self.ctx.load_settings(dict(DEFAULTS))
-        result = {k: raw.get(k, v) is True for k, v in DEFAULTS.items() if k != "cache_mb"}
-        result["cache_mb"] = raw.get("cache_mb") if type(raw.get("cache_mb")) is int and raw["cache_mb"] in (16, 32, 64) else 32
-        return result
+def reload_repaired(ctx):
+    """Explicit action only; retry reviewed files without changing permissions."""
+    _require_active(ctx)
+    if not _last_changed_ids:
+        raise RepairError("먼저 수정본을 적용해 주세요. 다시 불러올 확장이 없습니다.")
+    if not _operation.acquire(blocking=False):
+        raise RepairError("이미 복구 또는 다시 불러오기가 진행 중입니다.")
+    try:
+        manager = ctx._app_context.extension_manager
+        outcomes = []
+        for ext_id in list(_last_changed_ids):
+            if ext_id not in ALLOWED_IDS:
+                raise RepairError("다시 불러올 확장 목록이 올바르지 않습니다.")
+            with manager._lock:
+                _require_active(ctx)
+                record = next((r for r in manager.records if r.ext_id == ext_id), None)
+                if record is None or not record.approved or not record.enabled or record.blocked:
+                    outcomes.append({"id": ext_id, "status": "skipped", "reason": "existing_permission_choice"})
+                    continue
+                target = _safe_path(manager.extensions_root()) / ext_id
+                expected = _last_verified_files.get(ext_id, {})
+                if not expected or _safe_path(record.directory) != target or any(
+                        hashlib.sha256(_read(target / name, MAX_CONTENT)).hexdigest() != digest
+                        for name, digest in expected.items()):
+                    outcomes.append({"id": ext_id, "status": "error", "error": "확인 후 파일이 달라졌습니다. 수정본을 다시 확인해 주세요."})
+                    continue
+                parser = getattr(manager, "_parse_manifest_into", None)
+                if callable(parser):
+                    choices = {key: getattr(record, key) for key in ("approved", "enabled", "armed", "blocked")}
+                    try:
+                        parser(target / "extension.json", record)
+                    finally:
+                        for key, value in choices.items():
+                            setattr(record, key, value)
+            # The real manager uses a non-reentrant Lock. Its `enabled` load
+            # gate checks enabled/approved/blocked again under its own lock and
+            # does not enable anything; `retry` lacks the enabled recheck.
+            manager.load_by_key("enabled:" + ext_id)
+            with manager._lock:
+                outcomes.append({"id": ext_id, "status": record.status,
+                                 "error": str(getattr(record, "error", ""))[:300]})
+        return outcomes
+    finally:
+        _operation.release()
 
-    def memory_settings(self):
-        settings = self.settings()
-        return {"low_memory": settings["low_memory"] and self.active(), "cache_mb": settings["cache_mb"]}
-
-    def bridge_settings(self):
-        with self._lock:
-            settings = self.settings()
-            return {**(self._pair or {}), "enabled": settings["plugin_enabled"] and bool(self._pair) and self.active(),
-                    "permissions": {k: settings["allow_" + k] for k in ("read", "screen", "control", "edit", "generate")}}
-
-    def status(self):
-        memory = self.memory.refresh() if self.memory else {}
-        with self._lock:
-            result = {"settings": self.settings(), "memory": memory,
-                "paired": bool(self._pair), "extension_active": self.available(),
-                "armed": bool(self.ctx._record.armed), "relay_url": RELAY_URL}
-        # Broker permission guards acquire this controller's lock. Do not hold
-        # it while entering the broker (or simultaneous status/poll deadlocks).
-        result["bridge"] = self.bridge.status() if self.bridge else {"state": "stopped"}
-        result["screen"] = self.screen.status() if self.screen else {"ready": False}
-        return result
-
-    def _save(self, settings):
-        if not self.ctx.save_settings(settings):
-            raise ValueError("설정을 저장하지 못했습니다. 다시 시도하세요.")
-
-    def update_settings(self, changes):
-        self.require_available()
-        if not isinstance(changes, dict) or not changes or set(changes) - DEFAULTS.keys():
-            raise ValueError("설정 형식이 올바르지 않습니다.")
-        for key, value in changes.items():
-            if key == "cache_mb":
-                if type(value) is not int or value not in (16, 32, 64):
-                    raise ValueError("캐시 크기는 16, 32, 64MB 중 선택하세요.")
-            elif type(value) is not bool:
-                raise ValueError("설정은 켜기 또는 끄기여야 합니다.")
-        with self._lock:
-            new = {**self.settings(), **changes}
-            if new["plugin_enabled"] and not self._pair:
-                raise ValueError("먼저 연결 파일을 불러오세요.")
-            self._save(new)
-        return self.status()
-
-    def import_pairing(self, data):
-        self.require_available()
-        pair = _pairing(data)
-        with self._lock:
-            # Persist revocation first: a failed import never inherits old writes.
-            disabled = {**self.settings(), "plugin_enabled": False, "allow_read": True,
-                        "allow_screen": False, "allow_control": False, "allow_edit": False, "allow_generate": False}
-            self._save(disabled)
-            temporary = self.pair_path.with_suffix(".tmp")
-            fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-            try:
-                with os.fdopen(fd, "w", encoding="utf-8") as file:
-                    json.dump(pair, file, ensure_ascii=False)
-                    file.flush()
-                    os.fsync(file.fileno())
-                temporary.chmod(0o600)
-                os.replace(temporary, self.pair_path)
-            finally:
-                temporary.unlink(missing_ok=True)
-            self._pair = pair
-            self._save({**disabled, "plugin_enabled": True})
-        return self.status()
-
-    def disconnect(self):
-        self.require_available()
-        with self._lock:
-            self._save({**self.settings(), "plugin_enabled": False, "allow_screen": False,
-                        "allow_control": False, "allow_edit": False, "allow_generate": False})
-            self._pair = None
-            self.pair_path.unlink(missing_ok=True)
-        return self.status()
-
-    def open_folder(self, target):
-        self.require_available()
-        if not self.active():
-            return {"opened": False, "reason": "extension_inactive"}
-        app = self.ctx._app_context
-        if target == "save":
-            path = app._save_service().current_save_directory()
-        elif target == "artist":
-            from app.backend.server.artist_thumbnail_routes import artist_thumbnail_service
-            path = artist_thumbnail_service(app).mode_data_root
-        else:
-            raise ValueError("열 수 있는 폴더가 아닙니다.")
-        return self.folder_module.open_native_folder(path)
-
-    def open_relay(self):
-        self.require_available()
-        opened = False
-        if sys.platform == "android" or hasattr(sys, "getandroidapilevel"):
-            try:
-                r = subprocess.run(["/system/bin/am", "start", "-a", "android.intent.action.VIEW",
-                    "-c", "android.intent.category.BROWSABLE", "-d", RELAY_URL],
-                    stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                    timeout=10, check=False)
-                opened = r.returncode == 0
-            except (OSError, subprocess.SubprocessError):
-                pass
-        return {"opened": opened, "url": RELAY_URL}
-
-    def close(self):
-        with self._lock:
-            if self._closed:
-                return
-            self._closed = True
-        if self.bridge:
-            self.bridge.close()
-        if self.screen:
-            self.screen.close()
-        for cleanup in reversed(self._cleanup):
-            try:
-                cleanup()
-            except Exception:
-                pass
-        if self.memory:
-            self.memory.close()
-        app = self.ctx._app_context
-        if getattr(app, _CONTROLLER_ATTRIBUTE, None) is self:
-            delattr(app, _CONTROLLER_ATTRIBUTE)
-        atexit.unregister(self.close)
 
 def register(ctx):
-    global _controller
-    # The host creates a fresh main.py module on retry, so its _controller global
-    # alone cannot find the previous owner. Keep one owner on the live app too.
-    _retire_previous(ctx)
-    _controller = None
-    package = _runtime_package()
-    folder, memory, bridge, ui, screen = [_module(n, package) for n in _MODULE_NAMES]
-    if "screen_service" not in inspect.signature(bridge.DeviceBridge).parameters:
-        raise RuntimeError("Android 도구의 실행 파일 버전이 일치하지 않습니다. 복구 업데이트가 필요합니다.")
-    controller = Controller(ctx, _private_directory(ctx), folder)
-    try:
-        controller.memory = memory.install(controller.memory_settings, state_root=controller.state_root)
-        existing = getattr(ctx._app_context, "artist_thumbnail_service", None)
-        if existing is not None:
-            controller.memory.attach(existing)
-        controller.screen = screen.ScreenService()
-        controller.bridge = bridge.DeviceBridge(ctx, controller.bridge_settings,
-            state_root=controller.state_root, allowed_origins={RELAY_URL}, screen_service=controller.screen)
-        handle = ui.install_ui(controller, folder, memory)
-        controller._cleanup.append(handle if callable(handle) else handle.close)
-        ctx.register_panel([{"key": "help", "type": "action", "label": "Android 도구 설정 안내",
-            "help": "Settings → Global → Android 도구 · 플러그인에서 설정합니다."}],
-            title="Android 도구 0.2.1", on_action=lambda key: ctx.show_toast(
-                "화면 새로고침 후 Settings → Global → Android 도구 · 플러그인을 여세요.") if key == "help" else None)
-        controller.bridge.start()
-    except BaseException:
-        controller.close()
-        raise
-    _controller = controller
-    setattr(ctx._app_context, _CONTROLLER_ATTRIBUTE, controller)
-    atexit.register(controller.close)
-    ctx.log("Android 도구가 준비되었습니다. 화면을 새로고침하세요. 플러그인 연결은 설정에서 시작합니다.")
+    def run_action(key):
+        global _checked_release, _checked_at
+        try:
+            _require_active(ctx)
+            if key == "check_remote":
+                _checked_release = None
+                release = _download()
+                meta, _ = validate_release(release)
+                _require_active(ctx)
+                _checked_release, _checked_at = release, time.monotonic()
+                message = f"GitHub 수정본 {meta['target_version']} 확인 완료. 적용하려면 ‘확인한 수정본 적용’을 누르세요."
+            elif key == "reload_repaired":
+                outcomes = reload_repaired(ctx)
+                message = "\n".join(item["id"] + ": " + (
+                    "불러오기 완료" if item["status"] == "loaded" else "기존 권한에 따라 건너뜀" if item["status"] == "skipped"
+                    else "오류 · " + item.get("error", item["status"])) for item in outcomes)
+                message += "\nNAIA 화면을 새로고침해 주세요."
+                success = all(item["status"] in ("loaded", "skipped") for item in outcomes)
+                ctx.log(message)
+                ctx.show_toast(message, level="success" if success else "error")
+                return
+            elif key in ("apply_repair", "apply_remote"):
+                release = None
+                if key == "apply_remote":
+                    if _checked_release is None or time.monotonic() - _checked_at > 600:
+                        raise RepairError("먼저 ‘GitHub 최신 수정본 확인’을 눌러 주세요. 확인 결과는 10분 동안 유효합니다.")
+                    release, _checked_release = _checked_release, None
+                result = perform_update(ctx, release=release)
+                message = ("수정본이 이미 적용되어 있습니다." if result["already_updated"] else "수정본을 적용했고 기존 연결·설정 파일을 보존했습니다.")
+                if result.get("reload_ids"):
+                    message += " ‘수정한 확장 다시 불러오기’를 누르세요."
+                message += " 기존 승인·작동·차단 설정은 유지했습니다."
+                changed = [item["id"] for item in result.get("skipped", []) if item["reason"] == "source_changed"]
+                if changed:
+                    message += " 원본이 달라 수정하지 않은 확장: " + ", ".join(changed)
+            else:
+                return
+            ctx.log(message)
+            ctx.show_toast(message, level="success")
+        except Exception as error:
+            message = str(error) if isinstance(error, RepairError) else "수정 작업을 완료하지 못했습니다. 연결·설정을 삭제하지 말고 진단을 요청해 주세요."
+            ctx.log(message)
+            ctx.show_toast(message, level="error")
+
+    def action(key):
+        global _action_thread
+        if key not in ("check_remote", "reload_repaired", "apply_repair", "apply_remote"):
+            return
+        try:
+            _require_active(ctx)
+            with _action_lock:
+                if _action_thread is not None and _action_thread.is_alive():
+                    raise RepairError("이미 수정 작업을 진행 중입니다. 완료 결과를 기다려 주세요.")
+                # Every network/import/copy operation runs outside the backend
+                # event loop and the panel callback's manager lock.
+                _action_thread = threading.Thread(target=run_action, args=(key,), name="naia-repair-action", daemon=True)
+                _action_thread.start()
+        except RepairError as error:
+            ctx.show_toast(str(error), level="error")
+
+    ctx.register_panel([
+        {"key": "apply_repair", "type": "action", "scope": "global", "label": "내장 0.2.1 수정본 적용", "help": "오류가 난 도구의 소스만 교체합니다. 연결·설정 파일은 보존합니다."},
+        {"key": "reload_repaired", "type": "action", "scope": "global", "label": "수정한 확장 다시 불러오기", "help": "수정본과 일치하고 기존에 승인한 확장만 다시 불러옵니다. 꺼 두거나 차단한 확장은 켜지 않습니다."},
+        {"key": "check_remote", "type": "action", "scope": "global", "label": "GitHub 최신 수정본 확인", "help": "정해진 수정본 저장소에서 파일을 확인합니다. 자동으로 적용하지 않습니다."},
+        {"key": "apply_remote", "type": "action", "scope": "global", "label": "확인한 수정본 적용", "help": "10분 이내 확인한 수정본만 적용합니다. 완료 후 ‘수정한 확장 다시 불러오기’를 누르세요."},
+    ], title="NAIA Android 복구·업데이트", on_action=action)

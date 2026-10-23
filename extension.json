@@ -1,8 +1,8 @@
 {
-  "id": "naia_zz_android_tools_v1",
-  "name": "NAIA Android 도구 0.2.1",
-  "version": "0.2.1",
+  "id": "naia_android_tools_repair",
+  "name": "NAIA Android 복구·업데이트",
+  "version": "1.0.0",
   "naia_ext_api": 1,
   "entry": "main.py",
-  "description": "작가 썸네일 저메모리 모드, 폴더 열기, 개인용 ChatGPT 연결 및 앱 화면 조회·캡처·허용된 메뉴 조작. NAIA v2.0.48 전용. 화면·조작·수정·생성 권한은 각각 선택하며 Settings·인증·연결 설정 접근은 차단합니다."
+  "description": "Android 도구·ChatGPT 연결·저장 폴더 확장의 확인된 소스만 복구합니다. 연결과 설정을 보존하며 버튼을 눌렀을 때만 적용합니다. 이후에는 같은 도구에서 GitHub 수정본을 확인하고 적용할 수 있습니다."
 }
