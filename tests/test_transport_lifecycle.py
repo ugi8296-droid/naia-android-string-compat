@@ -21,9 +21,9 @@ class El {
 }
 (async()=>{
  const body=new El('body'), events={}, intervals=[];
- let installed;
+ let installed,historyBridge;
  const doc={body,createElement:t=>new El(t),addEventListener:(k,f)=>events[k]=f,visibilityState:'visible'};
- const win={addEventListener:(k,f)=>events[k]=f,__naiaInstallScreenAgent:args=>installed=args,dispatchEvent(){}};
+ const win={addEventListener:(k,f)=>events[k]=f,__naiaInstallScreenAgent:args=>installed=args,__naiaInstallHistoryLibrary:args=>historyBridge=args,dispatchEvent(){}};
  vm.runInNewContext(input.injection,{window:win,document:doc,location:{origin:'http://127.0.0.1:9000'},URL,Map,JSON,setInterval:f=>{intervals.push(f);return 1;},clearInterval(){},setTimeout(){},clearTimeout(){}});
  const frame=installed.frame,dialog=body.children.find(x=>x.tagName==='dialog');
  assert.equal(frame.parentElement,body);assert.notEqual(frame.parentElement,dialog);
@@ -32,13 +32,21 @@ class El {
  events.click({target:{closest:()=>true},preventDefault(){}});
  assert.equal(dialog.open,true);assert.ok(dialog.children[1].src);assert.notEqual(dialog.children[1],frame);
  dialog.close();intervals[0]();assert.equal(frame.parentElement,body);
+ events.message({source:frame.contentWindow,origin:'http://127.0.0.1:32101',data:{type:'naia-android-ready'}});
+ const historyPromise=historyBridge.request('browse',{root_id:'output',relative:''});
+ const message=frame.messages.at(-1).data;assert.equal(message.type,'naia-history-request');
+ assert.equal(message.action,'browse');let resolved=false;historyPromise.then(()=>resolved=true);
+ events.message({source:{},origin:'https://invalid.example',data:{type:'naia-history-result',id:message.id,result:{forged:true}}});
+ await new Promise(setImmediate);assert.equal(resolved,false);
+ events.message({source:frame.contentWindow,origin:'http://127.0.0.1:32101',data:{type:'naia-history-result',id:message.id,result:{files:[]}}});
+ assert.deepEqual(await historyPromise,{files:[]});
  for(const transport of [true,false]){
   const nodes=new Map(), listeners={},requests=[],out=[];
   const parent={postMessage:(d,o)=>out.push(d)};
   const document={body:{style:{}},getElementById:id=>{if(!nodes.has(id))nodes.set(id,{style:{},classList:{toggle(){}},addEventListener(){}});return nodes.get(id);}};
   const window={parent,addEventListener:(k,f)=>listeners[k]=f};
   const state={armed:true,extension_active:true,paired:true,settings:{plugin_enabled:true,allow_screen:true},memory:{},bridge:{},screen:{ready:true}};
-  const context={window,document,location:{hash:'#token=fake&parent=http%3A%2F%2F127.0.0.1%3A9000'+(transport?'&mode=transport':''),pathname:'/'},history:{replaceState(){}},URL,URLSearchParams,crypto:require('node:crypto').webcrypto,Uint8Array,Map,Set,Date,JSON,AbortController,setInterval(){},setTimeout(){return 1;},clearTimeout(){},fetch:async path=>{requests.push(path);return{ok:true,json:async()=>path==='/status'?state:{commands:[]}};}};
+  const context={window,document,location:{hash:'#token=fake&parent=http%3A%2F%2F127.0.0.1%3A9000'+(transport?'&mode=transport':''),pathname:'/'},history:{replaceState(){}},URL,URLSearchParams,crypto:require('node:crypto').webcrypto,Uint8Array,Map,Set,Date,JSON,AbortController,setInterval(){},setTimeout(){return 1;},clearTimeout(){},fetch:async path=>{requests.push(path);return{ok:true,json:async()=>path==='/status'?state:{commands:[]},blob:async()=>new Blob(['image'],{type:'image/png'})};}};
   vm.runInNewContext(input.panel,context);
   for(let i=0;i<3;i++)await new Promise(setImmediate);
   await listeners.message({source:parent,origin:'http://127.0.0.1:9000',data:{type:'naia-ui-ready'}});
@@ -49,6 +57,15 @@ class El {
   assert.equal(requests.includes('/screen/poll'),transport);
   requests.length=0;
   await listeners.message({source:{},origin:'https://invalid.example',data:{type:'naia-transport-wake'}});
+  assert.equal(requests.length,0);
+  await listeners.message({source:parent,origin:'http://127.0.0.1:9000',data:{type:'naia-history-request',id:123,action:'browse',data:{root_id:'output',relative:''}}});
+  assert.equal(requests.includes('/history/browse'),transport);
+  requests.length=0;
+  await listeners.message({source:parent,origin:'http://127.0.0.1:9000',data:{type:'naia-history-request',id:124,action:'asset',data:{id:'fixture',kind:'preview'}}});
+  assert.equal(requests.includes('/history/asset'),transport);
+  if(transport){const result=out.find(x=>x.type==='naia-history-result'&&x.id===124);assert.equal(result.result.size,5);}
+  requests.length=0;
+  await listeners.message({source:parent,origin:'http://127.0.0.1:9000',data:{type:'naia-history-request',id:125,action:'../../pair',data:{}}});
   assert.equal(requests.length,0);
  }
  console.log('transport independent of closed settings, wake recovery without iframe timers, settings cannot claim screen, origin guards: PASS');

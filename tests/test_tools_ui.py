@@ -37,6 +37,12 @@ class Controller:
         self.calls.append(("comic_prepare", None)); return self.status()
     def stop_prompt_server(self):
         self.calls.append(("comic_stop", None)); return self.status()
+    def history_request(self, action, data):
+        self.calls.append(("history", action, data)); return {"ok": True, "action": action}
+    def history_asset(self, item_id, kind):
+        if item_id != "test-image" or kind not in {"thumb", "preview", "image"}:
+            raise ValueError("잘못된 사진 요청입니다.")
+        self.calls.append(("asset", item_id, kind)); return b"test-image-bytes", "image/png"
 
 
 class ToolsUITests(unittest.TestCase):
@@ -82,6 +88,21 @@ class ToolsUITests(unittest.TestCase):
         self.assertEqual(self.request(server,"POST","/comic/stop",{})[0],200)
         self.assertEqual(controller.calls[-2:],[('comic_prepare',None),('comic_stop',None)])
         self.assertEqual(self.request(server, "GET", "/../../main.py")[0], 404)
+
+    def test_history_api_uses_same_private_origin_and_never_accepts_paths_as_assets(self):
+        controller = Controller(); server = ui.PanelServer(controller); self.addCleanup(server.close)
+        self.assertEqual(self.request(server, "POST", "/history/state", {}, auth=False)[0], 403)
+        self.assertEqual(self.request(server, "POST", "/history/import", {}, headers={"Origin": "https://other.invalid"})[0], 403)
+        self.assertEqual(controller.calls, [])
+        for action in ("state", "browse", "import", "job", "cancel", "list", "metadata"):
+            self.assertEqual(self.request(server, "POST", "/history/" + action, {"x": "fixture"})[0], 200)
+        for data in ({"id": "../../private", "kind": "image"}, {"id": "test-image", "kind": "unknown"},
+                     {"id": "test-image", "kind": "image", "path": "/etc/passwd"}):
+            self.assertEqual(self.request(server, "POST", "/history/asset", data)[0], 400)
+        code, body, headers = self.request(server, "POST", "/history/asset", {"id": "test-image", "kind": "preview"})
+        self.assertEqual((code, body, headers["Content-Type"]), (200, "test-image-bytes", "image/png"))
+        self.assertEqual(headers["Cache-Control"], "no-store")
+        self.assertEqual(self.request(server, "POST", "/history/delete", {})[0], 404)
 
     def test_real_source_javascript_and_panel_security_contract(self):
         index = (UPSTREAM / "app/web/remote/index.html").read_text()

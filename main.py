@@ -20,9 +20,10 @@ DEFAULTS = {"low_memory": True, "cache_mb": 32, "plugin_enabled": False,
 _PACKAGE_PREFIX = "_naia_android_tools_runtime_"
 _CONTROLLER_ATTRIBUTE = "_naia_android_tools_controller"
 _MODULE_NAMES = ("naia_folder_open", "naia_artist_memory", "naia_device_bridge",
-                 "naia_tools_ui", "naia_screen_service", "naia_comic_compat", "naia_prompt_server")
+                 "naia_tools_ui", "naia_screen_service", "naia_comic_compat", "naia_prompt_server",
+                 "naia_history_library")
 _RUNTIME_FILES = ("main.py", *(name + ".py" for name in _MODULE_NAMES),
-                  "android_tools_panel.html", "naia_screen_agent.js",
+                  "android_tools_panel.html", "naia_screen_agent.js", "naia_history_library.js",
                   "vendor/html2canvas-1.4.1.min.js", "promptserver-source-manifest.json")
 _controller = None
 
@@ -166,7 +167,8 @@ class Controller:
         self.pair_path = self.state_root / "pairing.json"
         self._lock, self._closed, self._cleanup = threading.RLock(), False, []
         self.memory, self.bridge, self.screen, self._pair = None, None, None, None
-        self.comic, self.prompt_server = None, None
+        self.comic, self.prompt_server, self.history_library = None, None, None
+        self._history_factory = None
         try:
             if self.pair_path.stat().st_size <= 32768:
                 self._pair = _pairing(json.loads(self.pair_path.read_text(encoding="utf-8")))
@@ -229,6 +231,25 @@ class Controller:
             raise
         return self.status()
 
+    def history_request(self, action, data):
+        return self._history().request(action, data)
+
+    def history_asset(self, item_id, kind):
+        return self._history().asset(item_id, kind)
+
+    def _history(self):
+        self.require_available()
+        if not self.active():
+            raise ValueError("Android 도구의 Activate This Script를 켜 주세요.")
+        with self._lock:
+            if self.history_library is None:
+                if self._history_factory is None:
+                    raise ValueError("사진 보관함을 준비하지 못했습니다. 화면을 새로고침해 주세요.")
+                # Gallery disk failures must not prevent the existing tools,
+                # settings or screen connection from loading.
+                self.history_library = self._history_factory()
+            return self.history_library
+
     def stop_prompt_server(self):
         self.require_available()
         with self._lock:
@@ -256,7 +277,7 @@ class Controller:
              "help": "원작자 GitHub에서 검증된 실행 파일을 받아 이 기기 안에서 시작합니다. 생성은 실행하지 않습니다."},
             {"key": "comic_status", "type": "action", "label": "Comic Maker 연결 상태 확인",
              "help": message},
-        ], title="Android 도구 0.2.6", on_action=self.panel_action)
+        ], title="Android 도구 0.2.7", on_action=self.panel_action)
 
     def panel_action(self, key):
         if key == "help":
@@ -372,6 +393,8 @@ class Controller:
             self.prompt_server.close()
         if self.comic:
             self.comic.close()
+        if self.history_library:
+            self.history_library.close()
         for cleanup in reversed(self._cleanup):
             try:
                 cleanup()
@@ -391,11 +414,12 @@ def register(ctx):
     _retire_previous(ctx)
     _controller = None
     package = _runtime_package()
-    folder, memory, bridge, ui, screen, comic, prompt_server = [_module(n, package) for n in _MODULE_NAMES]
+    folder, memory, bridge, ui, screen, comic, prompt_server, history_library = [_module(n, package) for n in _MODULE_NAMES]
     if "screen_service" not in inspect.signature(bridge.DeviceBridge).parameters:
         raise RuntimeError("Android 도구의 실행 파일 버전이 일치하지 않습니다. 복구 업데이트가 필요합니다.")
     controller = Controller(ctx, _private_directory(ctx), folder)
     try:
+        controller._history_factory = lambda: history_library.HistoryLibrary(ctx._app_context, controller.state_root)
         controller.comic = comic.install(ctx)
         controller.prompt_server = prompt_server.PromptServer(controller.state_root, controller._comic_token)
         if controller.settings()["comic_server_enabled"]:

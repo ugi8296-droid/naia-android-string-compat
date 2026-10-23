@@ -1,8 +1,8 @@
 {
   "id": "naia_zz_android_tools_v1",
-  "name": "NAIA Android 도구 0.2.6",
-  "version": "0.2.6",
+  "name": "NAIA Android 도구 0.2.7",
+  "version": "0.2.7",
   "naia_ext_api": 1,
   "entry": "main.py",
-  "description": "작가 썸네일 저메모리 모드, 폴더 열기, ChatGPT 화면 연결, Comic Maker 작업 상태 수정과 기기 내부 PromptServer 준비. NAIA v2.0.48 전용."
+  "description": "앱 안에서 사진·폴더 불러오기와 두 장 비교. 작가 썸네일 저메모리 모드, ChatGPT 화면 연결, Comic Maker 실행부 도구. NAIA v2.0.48 전용."
 }

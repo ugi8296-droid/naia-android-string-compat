@@ -71,6 +71,19 @@ class ControllerTests(unittest.TestCase):
         self.record.enabled=False
         with self.assertRaises(ValueError):self.c.import_pairing(self.pair)
 
+    def test_history_is_independent_of_plugin_pairing_and_requires_active_extension(self):
+        calls=[]
+        self.c.history_library=NS(request=lambda a,d:calls.append((a,d)) or {'ok':True},
+            asset=lambda i,k:calls.append((i,k)) or (b'image','image/png'),close=lambda:calls.append('closed'))
+        self.assertFalse(self.c.bridge_settings()['enabled'])
+        self.assertTrue(self.c.history_request('browse',{'relative':''})['ok'])
+        self.assertEqual(self.c.history_asset('item','preview'),(b'image','image/png'))
+        self.record.armed=False
+        with self.assertRaises(ValueError):self.c.history_request('import',{})
+        with self.assertRaises(ValueError):self.c.history_asset('item','image')
+        self.c.close()
+        self.assertEqual(calls,[('browse',{'relative':''}),('item','preview'),'closed'])
+
     def test_comic_server_is_explicit_and_uses_private_token_only_when_enabled(self):
         calls=[]
         self.ctx._app_context.secure_token_manager=NS(get_token=lambda key:calls.append(key) or 'PRIVATE-NAI')

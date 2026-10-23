@@ -53,6 +53,15 @@ async function api(path,data){
  try{const response=await fetch(path,options);const result=await response.json();
  if(!response.ok)throw new Error(result.error||'요청을 완료하지 못했습니다.');return result;}finally{clearTimeout(timer);}
 }
+async function historyAsset(data){
+ const controller=new AbortController();const timer=setTimeout(()=>controller.abort(),110000);
+ try{
+  const response=await fetch('/history/asset',{method:'POST',cache:'no-store',signal:controller.signal,
+   headers:{'X-NAIA-Android-Tools':token,'Content-Type':'application/json'},body:JSON.stringify(data)});
+  if(!response.ok){const result=await response.json();throw new Error(result.error||'사진을 불러오지 못했습니다.');}
+  return await response.blob();
+ }finally{clearTimeout(timer);}
+}
 function paint(){
  const settings=current.settings||{};const disabled=busy||current.extension_active!==true;
  for(const key of keys){$(key).checked=settings[key]===true;$(key).disabled=disabled;}
@@ -94,6 +103,14 @@ async function pollScreen(){
 window.addEventListener('message',async event=>{
  if(!parentAllowed||event.source!==window.parent||event.origin!==parentOrigin)return;
  const data=event.data;if(!data||typeof data!=='object')return;
+ if(data.type==='naia-history-request'&&transport&&Number.isSafeInteger(data.id)){
+  if(!['state','browse','import','job','cancel','list','metadata','asset'].includes(data.action))return;
+  try{
+   const result=data.action==='asset'?await historyAsset(data.data):await api('/history/'+data.action,data.data);
+   notifyParent({type:'naia-history-result',id:data.id,result});
+  }catch(error){notifyParent({type:'naia-history-result',id:data.id,error:error.message||'사진 요청을 완료하지 못했습니다.'});}
+  return;
+ }
  if(data.type==='naia-transport-wake'&&transport){notifyParent({type:'naia-android-ready'});if(Date.now()-lastStatusPoll>=3000){lastStatusPoll=Date.now();await poll();}pollScreen();return;}
  if(data.type==='naia-ui-ready'&&transport){screenReady=true;pollScreen();return;}
  if(data.type==='naia-ui-result'){

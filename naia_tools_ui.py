@@ -40,6 +40,18 @@ class PanelServer:
                 except (BrokenPipeError, ConnectionResetError):
                     pass
 
+            def reply_asset(self, body, content_type):
+                self.send_response(200)
+                self.send_header("Content-Type", content_type)
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("X-Content-Type-Options", "nosniff")
+                self.end_headers()
+                try:
+                    self.wfile.write(body)
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+
             def valid(self, mutation=False):
                 if self.headers.get("Host") != owner.authority:
                     self.reply(403, {"error": "Invalid host"})
@@ -79,7 +91,8 @@ class PanelServer:
                     return
                 try:
                     size = int(self.headers.get("Content-Length", "0"))
-                    maximum = 920000 if self.path == "/screen/result" else 65536
+                    maximum = (920000 if self.path == "/screen/result" else
+                               2 * 1024 * 1024 if self.path == "/history/import" else 65536)
                     if not 0 < size <= maximum or self.headers.get("Transfer-Encoding"):
                         raise ValueError()
                     data = json.loads(self.rfile.read(size))
@@ -109,6 +122,18 @@ class PanelServer:
                         if data:
                             raise ValueError("잘못된 Comic Maker 요청입니다.")
                         result = owner.controller.stop_prompt_server()
+                    elif self.path == "/history/asset":
+                        if set(data) != {"id", "kind"}:
+                            raise ValueError("잘못된 사진 요청입니다.")
+                        body, mime = owner.controller.history_asset(data["id"], data["kind"])
+                        self.reply_asset(body, mime)
+                        return
+                    elif self.path.startswith("/history/"):
+                        action = self.path[len("/history/"):]
+                        if action not in {"state", "browse", "import", "job", "cancel", "list", "metadata"}:
+                            self.reply(404, {"error": "Not found"})
+                            return
+                        result = owner.controller.history_request(action, data)
                     elif self.path in ("/screen/poll", "/screen/result"):
                         screen = owner.controller.screen
                         config = owner.controller.bridge_settings()
@@ -164,7 +189,8 @@ def patch_index(source):
 
 def _injection(panel_url):
     directory = Path(__file__).resolve().parent
-    scripts = [directory / "vendor/html2canvas-1.4.1.min.js", directory / "naia_screen_agent.js"]
+    scripts = [directory / "vendor/html2canvas-1.4.1.min.js", directory / "naia_screen_agent.js",
+               directory / "naia_history_library.js"]
     libraries = "\n".join(path.read_text(encoding="utf-8") for path in scripts)
     # Inline only packaged static assets. Never insert device data in scripts.
     libraries = libraries.replace("</script", "<\\/script")
@@ -183,6 +209,17 @@ const settingsFrame=document.createElement('iframe');settingsFrame.title='Androi
 dialog.append(close,settingsFrame);document.body.append(frame,dialog);
 window.__naiaInstallScreenAgent({frame,panelOrigin});
 let serial=0,ready=false,revision;const pending=new Map();
+const historyPending=new Map();
+async function historyCall(action,data={}){
+ for(let i=0;!ready&&i<40;i++)await new Promise(resolve=>setTimeout(resolve,250));
+ if(!ready)throw new Error('앱 실행부와 연결되지 않았습니다. 화면을 새로고침해 주세요.');
+ if(historyPending.size>=16)throw new Error('사진을 불러오는 중입니다. 잠시 후 다시 눌러 주세요.');
+ const id=++serial;return new Promise((resolve,reject)=>{
+  const timer=setTimeout(()=>{historyPending.delete(id);reject(new Error('응답을 기다리지 못했습니다. 가져오기 상태를 확인해 주세요.'));},120000);
+  historyPending.set(id,{resolve,reject,timer});
+  frame.contentWindow.postMessage({type:'naia-history-request',id,action,data},panelOrigin);
+ });
+}
 window.naiaAndroidTools={openFolderNative(target){
  if(!ready||!['save','artist'].includes(target))return Promise.resolve({opened:false});
  const id=++serial;return new Promise(resolve=>{
@@ -194,6 +231,12 @@ window.addEventListener('message',event=>{
  if(event.source!==frame.contentWindow||event.origin!==panelOrigin)return;
  const data=event.data;if(!data||typeof data!=='object')return;
  if(data.type==='naia-android-ready'){ready=true;return;}
+ if(data.type==='naia-history-result'){
+  const item=historyPending.get(data.id);if(!item)return;
+  historyPending.delete(data.id);clearTimeout(item.timer);
+  if(data.error)item.reject(new Error(String(data.error)));else item.resolve(data.result);
+  return;
+ }
  if(data.type==='naia-android-folder-result'){
   const item=pending.get(data.id);if(!item)return;pending.delete(data.id);clearTimeout(item.timer);item.resolve({opened:data.opened===true});
  }
@@ -210,6 +253,7 @@ window.addEventListener('pageshow',wakeTransport);
 document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')wakeTransport();});
 window.addEventListener('pagehide',event=>{if(!event.persisted)clearInterval(wakeTimer);});
 document.addEventListener('click',event=>{if(event.target.closest?.('[data-android-tools-open]')){event.preventDefault();if(!settingsFrame.src)settingsFrame.src=panelURL.href;if(!dialog.open)dialog.showModal();}});
+window.__naiaInstallHistoryLibrary?.({request:historyCall,asset:(id,kind)=>historyCall('asset',{id,kind})});
 })();</script>'''.replace("PANEL_URL", json.dumps(panel_url))
 
 
