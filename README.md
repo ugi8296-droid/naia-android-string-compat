@@ -1,4 +1,4 @@
-# NAIA Android 도구 0.2.5
+# NAIA Android 도구 0.2.6
 
 AI가 NAIA 웹 화면을 확인하고 조작한 뒤 변경된 화면을 확인하도록 연결합니다. 기본 화면 조회와 조작 결과에 화면 이미지를 포함합니다. 연속 영상 스트림이나 Android 시스템 전체 원격 조작은 아닙니다.
 
@@ -8,11 +8,21 @@ AI가 NAIA 웹 화면을 확인하고 조작한 뒤 변경된 화면을 확인�
 
 ## 기존 앱 업데이트
 
-기존 **NAIA Android 복구·업데이트**에서 **GitHub 최신 수정본 확인 → 0.2.5 확인 → 확인한 수정본 적용 → 수정한 확장 다시 불러오기 → NAIA 화면 새로고침**을 실행합니다. APK 재설치나 Termux, 플러그인 재연결은 필요 없습니다.
+기존 **NAIA Android 복구·업데이트**에서 **GitHub 최신 수정본 확인 → 0.2.6 확인 → 확인한 수정본 적용 → 수정한 확장 다시 불러오기 → NAIA 화면 새로고침**을 실행합니다. APK 재설치나 Termux, 플러그인 재연결은 필요 없습니다.
 
 복구 도구: https://github.com/ugi8296-droid/naia-android-string-compat/tree/android-tools-repair
 
 최초 설치용 소스: https://github.com/ugi8296-droid/naia-android-string-compat/tree/android-tools
+
+## 0.2.6 Comic Maker 수정
+
+PromptServer 연결 실패 후 작업 스레드가 끝나도 `NAI 작업 중`으로 남던 EXten 패널을 종료 시 다시 갱신합니다. 실제 진행 중인 요청·생성·대기 계획은 유지하며, 중지 버튼을 눌러도 아직 HTTP 요청이 끝나지 않았다면 중복 실행을 허용하지 않습니다. EXten 원본 파일은 덮어쓰지 않습니다.
+
+Comic Maker가 필요로 하는 별도 PromptServer를 앱 실행환경 안에서 준비할 수 있습니다. **Settings → Extension → Android 도구 0.2.6 → Comic Maker 실행부 준비** 또는 **Settings → Global → Android 도구 · 플러그인 → Comic Maker**를 사용합니다. 준비 자체는 생성 요청을 하지 않습니다. 이후 사용자가 만화 만들기를 실행하면 연결된 NovelAI 계정으로 이야기·구성안·이미지를 생성하며 무료 이용을 보장하지 않습니다.
+
+원작자 `okawaritsuika/PromptServer`의 고정 커밋을 기기에서 직접 내려받고 파일 해시를 확인합니다. 원본 서버 소스를 이 업데이트에 재배포하지 않습니다. 서버 파일과 DB는 앱 전용 폴더에 보존됩니다. 원본의 Windows 전용 인증 저장 대신 NAIA에 연결한 NAI 토큰을 요청 시 메모리에서 읽습니다. 별도 토큰 파일이나 환경변수에 복사하지 않습니다.
+
+이미 켜진 다른 서버를 종료하거나 덮어쓰지 않습니다. 설치된 실행부는 다음 앱 실행 때 다시 시작하며, `실행부 끄기`로 자동 시작을 해제할 수 있습니다. GitHub 다운로드나 Android 의존성에 문제가 생기면 상태에 표시합니다. 실제 기기 준비 결과와 만화 생성 성공은 별도로 확인해야 합니다.
 
 ## 연결과 권한
 

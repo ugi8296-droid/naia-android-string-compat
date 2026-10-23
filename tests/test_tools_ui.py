@@ -33,6 +33,10 @@ class Controller:
         self.calls.append(("folder", target)); return {"opened": False}
     def open_relay(self):
         self.calls.append(("relay", None)); return {"opened": False, "url": "https://naia-tablet-link.ugi8296.chatgpt.site"}
+    def prepare_prompt_server(self):
+        self.calls.append(("comic_prepare", None)); return self.status()
+    def stop_prompt_server(self):
+        self.calls.append(("comic_stop", None)); return self.status()
 
 
 class ToolsUITests(unittest.TestCase):
@@ -73,6 +77,10 @@ class ToolsUITests(unittest.TestCase):
                            ("/disconnect", {}), ("/folder/open", {"target": "save"}), ("/open-relay", {})):
             self.assertEqual(self.request(server, "POST", path, data)[0], 200)
         self.assertEqual(len(controller.calls), 5)
+        self.assertEqual(self.request(server,"POST","/comic/prepare",{'url':'https://other.example'})[0],400)
+        self.assertEqual(self.request(server,"POST","/comic/prepare",{})[0],200)
+        self.assertEqual(self.request(server,"POST","/comic/stop",{})[0],200)
+        self.assertEqual(controller.calls[-2:],[('comic_prepare',None),('comic_stop',None)])
         self.assertEqual(self.request(server, "GET", "/../../main.py")[0], 404)
 
     def test_real_source_javascript_and_panel_security_contract(self):

@@ -263,7 +263,7 @@
         if (part) text += (text ? '\n' : '') + part;
       }
       const random = global.crypto.randomUUID ? global.crypto.randomUUID() : Array.from(global.crypto.getRandomValues(new Uint32Array(4)), n => n.toString(36)).join('_');
-      const result = {agent_version: '0.2.5', snapshot_id: 'screen_' + random, title: 'NAIA', viewport: {width: global.innerWidth, height: global.innerHeight, scroll_x: global.scrollX, scroll_y: global.scrollY}, controls, text: text.slice(0, 12000), blocked: false};
+      const result = {agent_version: '0.2.6', snapshot_id: 'screen_' + random, title: 'NAIA', viewport: {width: global.innerWidth, height: global.innerHeight, scroll_x: global.scrollX, scroll_y: global.scrollY}, controls, text: text.slice(0, 12000), blocked: false};
       // Option dictionaries can be unusually large. Truncate options before
       // dropping controls, preserving all actionable target mappings.
       while (new TextEncoder().encode(JSON.stringify(result)).length > 260000) {

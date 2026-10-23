@@ -101,6 +101,14 @@ class PanelServer:
                         result = owner.controller.open_folder(data["target"])
                     elif self.path == "/open-relay":
                         result = owner.controller.open_relay()
+                    elif self.path == "/comic/prepare":
+                        if data:
+                            raise ValueError("잘못된 Comic Maker 요청입니다.")
+                        result = owner.controller.prepare_prompt_server()
+                    elif self.path == "/comic/stop":
+                        if data:
+                            raise ValueError("잘못된 Comic Maker 요청입니다.")
+                        result = owner.controller.stop_prompt_server()
                     elif self.path in ("/screen/poll", "/screen/result"):
                         screen = owner.controller.screen
                         config = owner.controller.bridge_settings()

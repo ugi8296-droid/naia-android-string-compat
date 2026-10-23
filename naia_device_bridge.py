@@ -21,7 +21,7 @@ from urllib.error import HTTPError
 from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
-RUNTIME_VERSION = "0.2.5"
+RUNTIME_VERSION = "0.2.6"
 MAX_AGE = 120
 MAX_PROMPT = 16000
 MAX_RESULT_BYTES = 60000

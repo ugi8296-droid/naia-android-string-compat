@@ -9,3 +9,5 @@ Private credentials and development data are not distributed.
 Includes html2canvas 1.4.1 by Niklas von Hertzen and contributors (MIT).
 Official npm package integrity checked before vendoring.
 See vendor/html2canvas-LICENSE.txt for the full MIT license.
+
+Comic Maker compatibility targets okawaritsuika/NAIA-EXten at f90c734803bd699c73f5854a83f96325a7071a8a. Optional PromptServer integration downloads verified source directly from okawaritsuika/PromptServer at ff4ccb6eb7f4b73b330fb3a6f46c8d8f4fa128fe on the user device; upstream PromptServer source is not included in this package.

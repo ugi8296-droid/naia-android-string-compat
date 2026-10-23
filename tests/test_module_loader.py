@@ -129,6 +129,8 @@ class ModuleLoaderTests(unittest.TestCase):
             "naia_screen_service.py": "class ScreenService:\n def close(self): pass\n def status(self): return {'ready':False}\n",
             "naia_device_bridge.py": "class DeviceBridge:\n def __init__(self,ctx,settings_getter,*,state_root=None,allowed_origins=None,screen_service=None):\n  self.app=ctx._app_context\n  self.app.events.append('construct')\n def start(self): self.app.events.append('start')\n def close(self): self.app.events.append('close')\n",
             "naia_tools_ui.py": "def install_ui(controller,folder,memory):\n return lambda: controller.ctx._app_context.events.append('ui-close')\n",
+            "naia_comic_compat.py": "from types import SimpleNamespace\ndef install(ctx): return SimpleNamespace(close=lambda:None,status=lambda:{})\n",
+            "naia_prompt_server.py": "class PromptServer:\n def __init__(self,*args): pass\n def close(self): pass\n def status(self): return {'state':'not_installed'}\n",
         }
         for name, text in files.items():
             (self.extension / name).write_text(text)

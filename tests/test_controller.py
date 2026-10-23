@@ -71,4 +71,39 @@ class ControllerTests(unittest.TestCase):
         self.record.enabled=False
         with self.assertRaises(ValueError):self.c.import_pairing(self.pair)
 
+    def test_comic_server_is_explicit_and_uses_private_token_only_when_enabled(self):
+        calls=[]
+        self.ctx._app_context.secure_token_manager=NS(get_token=lambda key:calls.append(key) or 'PRIVATE-NAI')
+        self.c.prompt_server=NS(prepare=lambda:calls.append('prepare'),stop=lambda:calls.append('stop'),
+                               status=lambda:{'state':'starting'},close=lambda:None)
+        self.assertEqual(self.c._comic_token(),'')
+        self.assertEqual(calls,[])
+        result=self.c.prepare_prompt_server()
+        self.assertEqual(calls,['prepare'])
+        self.assertTrue(result['settings']['comic_server_enabled'])
+        self.assertNotIn('PRIVATE',json.dumps(result))
+        self.assertEqual(self.c._comic_token(),'PRIVATE-NAI')
+        self.assertEqual(calls,['prepare','nai_token'])
+        self.record.armed=False
+        self.assertEqual(self.c._comic_token(),'')
+        with self.assertRaises(ValueError):self.c.prepare_prompt_server()
+        self.record.armed=True
+        self.c.stop_prompt_server()
+        self.assertEqual(self.c._comic_token(),'')
+        self.assertFalse(self.saved['comic_server_enabled'])
+        with self.assertRaises(ValueError):self.c.update_settings({'comic_server_enabled':True})
+
+    def test_comic_setup_does_not_run_when_preference_cannot_be_saved(self):
+        calls=[]
+        self.c.prompt_server=NS(prepare=lambda:calls.append('started'),close=lambda:None)
+        self.ctx.save_settings=lambda settings:False
+        with self.assertRaises(ValueError):self.c.prepare_prompt_server()
+        self.assertEqual(calls,[])
+
+    def test_comic_setup_start_failure_rolls_back_enable_preference(self):
+        def fail():raise RuntimeError('cannot start worker')
+        self.c.prompt_server=NS(prepare=fail,close=lambda:None)
+        with self.assertRaises(RuntimeError):self.c.prepare_prompt_server()
+        self.assertFalse(self.saved['comic_server_enabled'])
+
 if __name__=='__main__':unittest.main()

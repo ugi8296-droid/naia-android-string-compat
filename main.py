@@ -16,14 +16,14 @@ import types
 RELAY_URL = "https://naia-tablet-link.ugi8296.chatgpt.site"
 DEFAULTS = {"low_memory": True, "cache_mb": 32, "plugin_enabled": False,
             "allow_read": True, "allow_screen": False, "allow_control": False,
-            "allow_edit": False, "allow_generate": False}
+            "allow_edit": False, "allow_generate": False, "comic_server_enabled": False}
 _PACKAGE_PREFIX = "_naia_android_tools_runtime_"
 _CONTROLLER_ATTRIBUTE = "_naia_android_tools_controller"
 _MODULE_NAMES = ("naia_folder_open", "naia_artist_memory", "naia_device_bridge",
-                 "naia_tools_ui", "naia_screen_service")
+                 "naia_tools_ui", "naia_screen_service", "naia_comic_compat", "naia_prompt_server")
 _RUNTIME_FILES = ("main.py", *(name + ".py" for name in _MODULE_NAMES),
                   "android_tools_panel.html", "naia_screen_agent.js",
-                  "vendor/html2canvas-1.4.1.min.js")
+                  "vendor/html2canvas-1.4.1.min.js", "promptserver-source-manifest.json")
 _controller = None
 
 def _runtime_package():
@@ -166,6 +166,7 @@ class Controller:
         self.pair_path = self.state_root / "pairing.json"
         self._lock, self._closed, self._cleanup = threading.RLock(), False, []
         self.memory, self.bridge, self.screen, self._pair = None, None, None, None
+        self.comic, self.prompt_server = None, None
         try:
             if self.pair_path.stat().st_size <= 32768:
                 self._pair = _pairing(json.loads(self.pair_path.read_text(encoding="utf-8")))
@@ -209,7 +210,71 @@ class Controller:
         # it while entering the broker (or simultaneous status/poll deadlocks).
         result["bridge"] = self.bridge.status() if self.bridge else {"state": "stopped"}
         result["screen"] = self.screen.status() if self.screen else {"ready": False}
+        result["comic"] = self.comic.status() if self.comic else {"state": "unavailable"}
+        result["prompt_server"] = self.prompt_server.status() if self.prompt_server else {"state": "unavailable"}
         return result
+
+    def prepare_prompt_server(self):
+        self.require_available()
+        if not self.active() or self.prompt_server is None:
+            raise ValueError("Android 도구의 Activate This Script를 켜 주세요.")
+        with self._lock:
+            previous = self.settings()
+            self._save({**previous, "comic_server_enabled": True})
+        try:
+            self.prompt_server.prepare()
+        except Exception:
+            with self._lock:
+                self._save({**self.settings(), "comic_server_enabled": previous["comic_server_enabled"]})
+            raise
+        return self.status()
+
+    def stop_prompt_server(self):
+        self.require_available()
+        with self._lock:
+            self._save({**self.settings(), "comic_server_enabled": False})
+        if self.prompt_server:
+            self.prompt_server.stop()
+        return self.status()
+
+    @staticmethod
+    def _comic_status_message(server):
+        labels = {"not_installed": "실행부 준비 필요", "stopped": "실행부 꺼짐",
+                  "preparing": "실행부 준비 중", "downloading": "실행 파일 받는 중",
+                  "starting": "실행부 시작 중", "running": "실행부 연결 준비 완료",
+                  "ready": "실행부 연결 준비 완료", "external": "기존 PromptServer 연결",
+                  "stopping": "실행부 종료 중", "error": "실행부 확인 필요"}
+        state = labels.get(server.get("state"), server.get("state", "준비 필요"))
+        return state + (" · " + server["error"] if server.get("error") else "")
+
+    def register_panel(self):
+        message = self._comic_status_message(self.prompt_server.status() if self.prompt_server else {})
+        self.ctx.register_panel([
+            {"key": "help", "type": "action", "label": "Android 도구 설정 안내",
+             "help": "Settings → Global → Android 도구 · 플러그인에서 설정합니다."},
+            {"key": "comic_prepare", "type": "action", "label": "Comic Maker 실행부 준비",
+             "help": "원작자 GitHub에서 검증된 실행 파일을 받아 이 기기 안에서 시작합니다. 생성은 실행하지 않습니다."},
+            {"key": "comic_status", "type": "action", "label": "Comic Maker 연결 상태 확인",
+             "help": message},
+        ], title="Android 도구 0.2.6", on_action=self.panel_action)
+
+    def panel_action(self, key):
+        if key == "help":
+            self.ctx.show_toast("Settings → Global → Android 도구 · 플러그인을 여세요.")
+        elif key in ("comic_prepare", "comic_status"):
+            if key == "comic_prepare":
+                self.prepare_prompt_server()
+            self.register_panel()
+            server = self.prompt_server.status()
+            self.ctx.show_toast("Comic Maker: " + self._comic_status_message(server))
+
+    def _comic_token(self):
+        # Read only when the owned server actually needs NAI authentication.
+        # Never copy it to environment variables, status, logs or server settings.
+        if not self.active() or not self.settings()["comic_server_enabled"]:
+            return ""
+        manager = getattr(self.ctx._app_context, "secure_token_manager", None)
+        return manager.get_token("nai_token") if manager is not None else ""
 
     def _save(self, settings):
         if not self.ctx.save_settings(settings):
@@ -219,6 +284,8 @@ class Controller:
         self.require_available()
         if not isinstance(changes, dict) or not changes or set(changes) - DEFAULTS.keys():
             raise ValueError("설정 형식이 올바르지 않습니다.")
+        if "comic_server_enabled" in changes:
+            raise ValueError("Comic Maker 실행부 준비·끄기 버튼을 사용하세요.")
         for key, value in changes.items():
             if key == "cache_mb":
                 if type(value) is not int or value not in (16, 32, 64):
@@ -301,6 +368,10 @@ class Controller:
             self.bridge.close()
         if self.screen:
             self.screen.close()
+        if self.prompt_server:
+            self.prompt_server.close()
+        if self.comic:
+            self.comic.close()
         for cleanup in reversed(self._cleanup):
             try:
                 cleanup()
@@ -320,11 +391,15 @@ def register(ctx):
     _retire_previous(ctx)
     _controller = None
     package = _runtime_package()
-    folder, memory, bridge, ui, screen = [_module(n, package) for n in _MODULE_NAMES]
+    folder, memory, bridge, ui, screen, comic, prompt_server = [_module(n, package) for n in _MODULE_NAMES]
     if "screen_service" not in inspect.signature(bridge.DeviceBridge).parameters:
         raise RuntimeError("Android 도구의 실행 파일 버전이 일치하지 않습니다. 복구 업데이트가 필요합니다.")
     controller = Controller(ctx, _private_directory(ctx), folder)
     try:
+        controller.comic = comic.install(ctx)
+        controller.prompt_server = prompt_server.PromptServer(controller.state_root, controller._comic_token)
+        if controller.settings()["comic_server_enabled"]:
+            controller.prompt_server.start_installed()
         controller.memory = memory.install(controller.memory_settings, state_root=controller.state_root)
         existing = getattr(ctx._app_context, "artist_thumbnail_service", None)
         if existing is not None:
@@ -334,10 +409,7 @@ def register(ctx):
             state_root=controller.state_root, allowed_origins={RELAY_URL}, screen_service=controller.screen)
         handle = ui.install_ui(controller, folder, memory)
         controller._cleanup.append(handle if callable(handle) else handle.close)
-        ctx.register_panel([{"key": "help", "type": "action", "label": "Android 도구 설정 안내",
-            "help": "Settings → Global → Android 도구 · 플러그인에서 설정합니다."}],
-            title="Android 도구 0.2.5", on_action=lambda key: ctx.show_toast(
-                "화면 새로고침 후 Settings → Global → Android 도구 · 플러그인을 여세요.") if key == "help" else None)
+        controller.register_panel()
         controller.bridge.start()
     except BaseException:
         controller.close()
