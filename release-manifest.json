@@ -4,17 +4,20 @@
   "main": {
     "files": {
       "LICENSE": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
-      "NOTICE.txt": "81de492e4204a58651516b94b3d6bc1e6b657e0c6fc2ea326a03cbf453cf4542",
-      "README.md": "b44fc1254df175e7691665058379348dc5ca53da3f2582567c16e8a1b6ba55c0",
-      "android_tools_panel.html": "f82df04cad2fc7c57c1a0f7fa986c9d6624f21259bc2924a24d4f3a8213c3a39",
-      "extension.json": "64ca32044159aadd3649a88ac467682e8abc3f8413aca1fc04625a2455685c6f",
-      "main.py": "d48a2e1a65970d7ad219591daa21c2d0e444fa70c96aae611d7705213e5aa77f",
+      "NOTICE.txt": "7df192033beeb49ac45c5c4caf4d230d9a7441f1701fa1c247b9ad9feda1f76b",
+      "README.md": "2ea17efc1ba8adc4b79d3d2ba4fffdb471f5ebe6a8e877eb2b928ea81c5d3857",
+      "android_tools_panel.html": "f5a6213edf837621bfc45e09bc34be1281fd368f84693354a3f3190009768de1",
+      "extension.json": "2a413be20cc2240dc6348924d9b615ecc7ebf758bf1c4182739b6d3a2b701ff7",
+      "main.py": "8bab8db5b46837a22bb96ed1b3bd2a45c5a0119b46cce4e81bdac178f1cbe555",
       "naia_artist_memory.py": "bfc933f608024bf34477a2d993406516516a3e9395124796bc0b593c9c046b9d",
-      "naia_device_bridge.py": "0054ba58650b458dc4486af4f969a4b0bb4824d25d49d2dfd7b812b10eebcde3",
+      "naia_comic_compat.py": "88eb4ebb2cbab3795308a6be88dfd0bce535d25d8346c2e05079566f62dc77e2",
+      "naia_device_bridge.py": "a30c97fa200f84db72ad05310c4fd21524147825e5bd9011a5fde16c7d0609cd",
       "naia_folder_open.py": "6a716369b4022e20ac41199651b57301ec9f662c748f5f7c33eafc34086f595a",
-      "naia_screen_agent.js": "aaf476d7eb23d39709bb4fd8050e8dbd4b0a9786ee87314affbbb8862e18a4c7",
+      "naia_prompt_server.py": "fac89e229984b7b88f40f65c814a8b5af96ac05e2a10e5410a335085edec4be2",
+      "naia_screen_agent.js": "48c9094ca0fe105377f19242be382b36c065af9a647295385e9c0aed02673097",
       "naia_screen_service.py": "ce5698bd73e1d83bd6d7ac5d310d16784fbc10f61cd1ab047ecb3e180819ee71",
-      "naia_tools_ui.py": "76eb251d8e52993d6537e2f4f13bff549895d074948b0a07c087066c31c3a589",
+      "naia_tools_ui.py": "88efed843ef653d7c36653980006ebcebe3e440a9dd0126939043ed695c99bf8",
+      "promptserver-source-manifest.json": "5ccda4e0c0c985e11cbceeec23ca8f5e4d56f591038e4cadef1204f9517ae81e",
       "vendor/html2canvas-1.4.1.min.js": "e87e550794322e574a1fda0c1549a3c70dae5a93d9113417a429016838eab8cb",
       "vendor/html2canvas-LICENSE.txt": "86200ce4e92d9a22c41c8647a55f7a5fddff304ff89b4d36ecc699ed8c123d2c"
     },
@@ -96,6 +99,6 @@
       ]
     }
   },
-  "sha256": "a7437d55dc7c4191e3e537fe7bde1166d9b4e50a240a71723def33d57caa7197",
-  "target_version": "0.2.5"
+  "sha256": "bf4df33133e98e7b650e8c3ccd7fb1212928291bfb25302ec9eb95bccc9ac89b",
+  "target_version": "0.2.6"
 }

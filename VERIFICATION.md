@@ -75,3 +75,17 @@ This release repairs extension initialization and reload failures. It does not r
 ## Limits
 
 This is local host and source-level verification. The user's Galaxy/WebView has not run this repair yet. Managed browser preview was unavailable. The separately installed convenience extension 0.4.1 was not available in the pinned host source and was not included in the integration run. Live OAuth, relay connectivity, and the device UI must be checked after applying the repair; passing these tests does not establish those outcomes.
+
+
+## 0.2.6 Comic Maker verification — 2026-10-23
+
+- 118 Python tests passed with exact upstream PromptServer fixture enabled.
+- 35 screen-agent JavaScript tests passed.
+- 25 updater tests and 7 real NAIA extension reload tests passed.
+- Cached busy state reproduced on exact EXten source; 12 compatibility regressions cover failures, cancellation, active plans, hot reload and worker ownership.
+- 14 PromptServer tests include original FastAPI lifespan/SQLite, fake Story/Director responses through streaming plan/save/use, and real localhost startup/shutdown/restart with data preserved.
+- Tests forbid real NovelAI transport. Startup/status read the token zero times. No user generation was triggered.
+- Source fixture files are diagnostic inputs only and are not in the published payload. PromptServer downloads directly from its author at the pinned manifest commit upon explicit preparation.
+- APK/device installation and actual paid or free generation are separate from host verification; do not describe tests as a Galaxy generation success.
+- Payload SHA256: bf4df33133e98e7b650e8c3ccd7fb1212928291bfb25302ec9eb95bccc9ac89b
+- Manifest SHA256: 6fbd711d8120dd49265d29d8be36bc3af0a1ada52470174245524734294b04bd
