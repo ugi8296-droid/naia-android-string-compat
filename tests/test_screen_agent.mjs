@@ -53,6 +53,7 @@ class Textarea extends Input { get value() { return this._value || ''; } set val
 
 function fixture() {
   const body = new Element('BODY'), elements = [], messages = [], listeners = new Map(), observers = [];
+  let clock = 0;
   body.id = ''; body.rect = {x: 0, y: 0, left: 0, top: 0, right: 1000, bottom: 800, width: 1000, height: 800};
   const doc = {
     body,
@@ -64,6 +65,7 @@ function fixture() {
   };
   const window = {
     document: doc, innerWidth: 1000, innerHeight: 800, scrollX: 0, scrollY: 0, crypto: webcrypto,
+    performance: {now: () => clock},
     getComputedStyle: () => ({display: 'block', visibility: 'visible', opacity: '1', overflow: 'visible', overflowX: 'visible', overflowY: 'visible'}),
     HTMLInputElement: Input, HTMLSelectElement: Select, HTMLTextAreaElement: Textarea,
     Event: class { constructor(type) { this.type = type; } },
@@ -93,7 +95,8 @@ function fixture() {
     for (let attempts = 0; attempts < 10; attempts++) { await new Promise(resolve => setImmediate(resolve)); const result = messages.find(m => m.message.id === id); if (result) return JSON.parse(JSON.stringify(result.message)); }
     return undefined;
   }
-  return {add, call, doc, window, frame, messages, listeners, observers, permissions, policy: context.module.exports.policy, optionAllowed: context.module.exports.optionAllowed};
+  return {add, call, doc, window, frame, messages, listeners, observers, permissions,
+    advanceTime: ms => { clock += ms; }, policy: context.module.exports.policy, optionAllowed: context.module.exports.optionAllowed};
 }
 
 test('only the exact trusted panel can send commands; handshake is acknowledged', async () => {
@@ -222,13 +225,12 @@ test('unrelated live DOM updates preserve Quick snapshot through queued and deli
   assert.equal(response.is_error, false); assert.equal(quick.clicks, 1);
 });
 
-test('actual target, ancestor and trusted user changes still reject saved clicks', async () => {
-  for (const mode of ['ancestor', 'handler', 'user']) {
+test('actual target and ancestor changes still reject saved navigation clicks', async () => {
+  for (const mode of ['ancestor', 'handler']) {
     const f = fixture(), parent = f.add('DIV'), quick = f.add('BUTTON', {onclick: 'toggleTagFilter()'}, parent);
     const {result: screen} = await f.call('naia_get_screen');
     if (mode === 'ancestor') { parent.attrs.class = 'new-context'; f.observers[0].records.push({type:'attributes', target:parent, attributeName:'class', oldValue:null}); }
     if (mode === 'handler') quick.attrs.onclick = 'generateAction()';
-    if (mode === 'user') f.listeners.get('doc:pointerdown')({isTrusted: true});
     const response = await f.call('naia_ui_action', {snapshot_id:screen.snapshot_id, target:screen.controls[0].target, action:'click'});
     assert.match(response.result.error.code, /^stale_/); assert.equal(quick.clicks, 0);
   }
@@ -263,7 +265,7 @@ test('new protected screen blocks action even when original button is unchanged'
 test('branded Android shell view switch uses exact observed title and reports agent version', async () => {
   const f = fixture(), button = f.add('DIV', {role:'button', label:'NAIA2 간편 화면 ▾', title:'간편 화면 사용 중. 전체 기능을 보려면 전체 화면으로 전환'});
   const {result: screen} = await f.call('naia_get_screen');
-  assert.equal(screen.agent_version, '0.2.3');
+  assert.equal(screen.agent_version, '0.2.4');
   const result = await f.call('naia_ui_action', {snapshot_id:screen.snapshot_id,target:screen.controls[0].target,action:'click'});
   assert.equal(result.is_error, false);assert.equal(button.clicks,1);
 });
@@ -278,5 +280,110 @@ test('trusted automatic scroll and resize keep stable Quick target; moved target
     const result=await f.call('naia_ui_action',{snapshot_id:screen.snapshot_id,target:screen.controls[0].target,action:'click'});
     if(moved){assert.equal(result.result.error.code,'stale_target');assert.equal(button.clicks,0);}
     else {assert.equal(result.is_error,false);assert.equal(button.clicks,1);}
+  }
+});
+
+test('overlapping screen reads preserve prior navigation, then consume all old snapshots', async () => {
+  const f = fixture(), quick = f.add('BUTTON', {onclick:'openFnQuick()'});
+  const [first, second] = await Promise.all([f.call('naia_get_screen'), f.call('naia_get_screen')]);
+  const action = screen => ({snapshot_id:screen.snapshot_id, target:screen.controls[0].target, action:'click'});
+  assert.equal((await f.call('naia_ui_action', action(first.result))).is_error, false);
+  assert.equal((await f.call('naia_ui_action', action(second.result))).result.error.code, 'stale_snapshot');
+  assert.equal(quick.clicks, 1);
+});
+
+test('unrelated trusted touch and keyboard input preserve only unchanged navigation', async () => {
+  for (const event of ['pointerdown', 'keydown']) {
+    const f = fixture(), quick = f.add('BUTTON', {onclick:'openFnQuick()'});
+    const screen = (await f.call('naia_get_screen')).result;
+    f.listeners.get('doc:' + event)({isTrusted:true, target:f.doc.body});
+    const response = await f.call('naia_ui_action', {snapshot_id:screen.snapshot_id, target:screen.controls[0].target, action:'click'});
+    assert.equal(response.is_error, false); assert.equal(quick.clicks, 1);
+  }
+});
+
+test('trusted input still rejects field edits, edit buttons and whole-page scroll', async () => {
+  for (const mode of ['fill', 'edit-click', 'page-scroll']) {
+    const f = fixture();
+    const target = mode === 'fill' ? f.add('TEXTAREA', {id:'promptEdit'}) : f.add('BUTTON', {id:'artistThumbInsertBtn'});
+    const screen = (await f.call('naia_get_screen')).result;
+    f.listeners.get('doc:keydown')({isTrusted:true, target:f.doc.body});
+    const args = {snapshot_id:screen.snapshot_id, target:screen.controls[0].target, action:mode === 'fill' ? 'fill' : 'click'};
+    if (mode === 'fill') args.value = 'changed';
+    if (mode === 'page-scroll') { delete args.target; args.action = 'scroll'; args.direction = 'down'; }
+    const response = await f.call('naia_ui_action', args);
+    assert.equal(response.result.error.code, 'stale_user_input');
+    assert.equal(target.value, ''); assert.equal(target.clicks, 0); assert.equal(f.window.scrollY, 0);
+  }
+});
+
+test('trusted input allows bounded target scroll only while its exact state is unchanged', async () => {
+  for (const moved of [false, true]) {
+    const f = fixture(), panel = f.add('DIV', {id:'thumbnailPanel'});
+    panel.scrollHeight = 1000;
+    f.window.getComputedStyle = el => ({display:'block', visibility:'visible', opacity:'1', overflow:el === panel ? 'auto' : 'visible', overflowX:'visible', overflowY:'visible'});
+    const screen = (await f.call('naia_get_screen')).result;
+    const area = screen.controls.find(c => c.role === 'scrollarea');
+    assert.ok(area);
+    f.listeners.get('doc:pointerdown')({isTrusted:true, target:f.doc.body});
+    if (moved) panel.scrollTop = 10;
+    const response = await f.call('naia_ui_action', {snapshot_id:screen.snapshot_id, target:area.target, action:'scroll', direction:'down', amount:50});
+    if (moved) { assert.equal(response.result.error.code, 'stale_target'); assert.equal(panel.scrollTop, 10); }
+    else { assert.equal(response.is_error, false); assert.equal(panel.scrollTop, 50); }
+  }
+});
+
+test('mutations dirty earlier snapshots even after a newer read', async () => {
+  const f = fixture(), quick = f.add('BUTTON', {onclick:'openFnQuick()'});
+  const first = (await f.call('naia_get_screen')).result;
+  quick.attrs.class = 'changed';
+  f.observers[0].records.push({type:'attributes', target:quick, attributeName:'class', oldValue:null});
+  await f.call('naia_get_screen');
+  const response = await f.call('naia_ui_action', {snapshot_id:first.snapshot_id, target:first.controls[0].target, action:'click'});
+  assert.equal(response.result.error.code, 'stale_target'); assert.equal(quick.clicks, 0);
+});
+
+test('snapshots expire after 120 seconds and only the most recent four are retained', async () => {
+  for (const elapsed of [119999, 120000]) {
+    const f = fixture(), quick = f.add('BUTTON', {onclick:'openFnQuick()'});
+    const screen = (await f.call('naia_get_screen')).result;
+    f.advanceTime(elapsed);
+    const response = await f.call('naia_ui_action', {snapshot_id:screen.snapshot_id, target:screen.controls[0].target, action:'click'});
+    assert.equal(response.is_error, elapsed === 120000);
+    assert.equal(quick.clicks, elapsed === 120000 ? 0 : 1);
+  }
+  for (const count of [4, 5]) {
+    const f = fixture(), quick = f.add('BUTTON', {onclick:'openFnQuick()'});
+    const screens = [];
+    for (let i = 0; i < count; i++) screens.push((await f.call('naia_get_screen')).result);
+    const response = await f.call('naia_ui_action', {snapshot_id:screens[0].snapshot_id, target:screens[0].controls[0].target, action:'click'});
+    assert.equal(response.is_error, count === 5); assert.equal(quick.clicks, count === 5 ? 0 : 1);
+  }
+});
+
+test('failed read preserves a safe snapshot, protected-screen read clears it', async () => {
+  for (const protectedView of [false, true]) {
+    const f = fixture(), quick = f.add('BUTTON', {onclick:'openFnQuick()'});
+    const screen = (await f.call('naia_get_screen')).result;
+    const settings = protectedView ? f.add('DIV', {id:'settingsRoot'}) : null;
+    const failed = await f.call('naia_get_screen', {capture:true});
+    assert.equal(failed.is_error, true);
+    if (settings) settings.hidden = true;
+    const response = await f.call('naia_ui_action', {snapshot_id:screen.snapshot_id, target:screen.controls[0].target, action:'click'});
+    assert.equal(response.is_error, protectedView); assert.equal(quick.clicks, protectedView ? 0 : 1);
+  }
+});
+
+test('focusable Android switch accepts normalized exact title but blocks unsafe lookalikes', async () => {
+  for (const title of ['  간편 화면 사용 중.\n 전체 기능을 보려면 전체 화면으로 전환  ', '전체 화면 사용 중.\t 간편 화면으로 전환']) {
+    const f = fixture(), button = f.add('DIV', {tabindex:'0', label:'NAIA2 ▾', title});
+    const screen = (await f.call('naia_get_screen')).result;
+    const response = await f.call('naia_ui_action', {snapshot_id:screen.snapshot_id, target:screen.controls[0].target, action:'click'});
+    assert.equal(response.is_error, false); assert.equal(button.clicks, 1);
+    const form = f.add('FORM');
+    assert.equal(f.policy(f.add('DIV', {tabindex:'0', title}, form)).actions.length, 0);
+    assert.equal(f.policy(f.add('DIV', {tabindex:'0', title, onclick:'generateAction()'})).actions.length, 0);
+    assert.equal(f.policy(f.add('DIV', {tabindex:'0', title:title + ' more'})).actions.length, 0);
+    assert.equal(f.policy(f.add('DIV', {title})).actions.length, 0);
   }
 });

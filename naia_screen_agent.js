@@ -5,6 +5,7 @@
 (function (global) {
   'use strict';
   const MAX_CONTROLS = 160;
+  const MAX_SNAPSHOTS = 4, SNAPSHOT_TTL_MS = 120000;
   const SENSITIVE_ROOTS = '#apiPopupOverlay,#setupDialog,#rightTabSettings,#settingsRoot,#naiAcctPop,' +
     '#webuiCustomPayloadPopup,#peDebugPanel,#naiModelManagerPanel,' +
     '[data-naia-sensitive],dialog[aria-label="Android 도구 · 플러그인"]';
@@ -86,10 +87,15 @@
     const identifiers = [id, handler, attr(el, 'data-studio-action'), attr(el, 'data-action'), attr(el, 'data-artist-batch-mode')].join(' ');
     // Presentation-only controls may be added by the Android shell. Never
     // infer arbitrary button safety from the absence of a blocked word.
-    if (!BLOCK_NAMES.test(identifiers) && !el.closest('form') && el.matches('button,[role="button"],[onclick]')) {
+    if (!BLOCK_NAMES.test(identifiers) && !el.closest('form')) {
+      // The Android shell also renders this audited switch as a focusable DIV.
+      const title = norm(attr(el, 'title'), 300);
+      const shellViewTitle = /^(?:간편 화면 사용 중\. 전체 기능을 보려면 전체 화면으로 전환|전체 화면 사용 중\. 간편 화면으로 전환)$/.test(title);
+      if (shellViewTitle && el.matches('button,[role="button"],[onclick],[tabindex]')) return {actions: ['click'], edit: false};
+      if (!el.matches('button,[role="button"],[onclick]')) return {actions: [], reason: 'unsupported_control'};
       const text = norm(el.textContent, 100).replace(/[▾▴▼▲⛶]/g, '').trim();
       const viewLabels = /^(?:간편 화면|전체 화면|전체화면|전체 화면으로 전환|간편 화면으로 전환|크게 보기|접기|펼치기|Full screen|Fullscreen|Simple view)$/i;
-      if (viewLabels.test(text) || /^(?:간편 화면 사용 중\. 전체 기능을 보려면 전체 화면으로 전환|전체 화면 사용 중\. 간편 화면으로 전환)$/.test(attr(el, 'title'))) return {actions: ['click'], edit: false};
+      if (viewLabels.test(text)) return {actions: ['click'], edit: false};
       // Standard tab/disclosure navigation must identify its local destination.
       const destination = attr(el, 'aria-controls');
       const panel = destination && global.document.getElementById?.(destination);
@@ -220,8 +226,14 @@
     const doc = global.document;
     if (!frame || frame.tagName !== 'IFRAME' || typeof panelOrigin !== 'string' || new URL(panelOrigin).origin !== panelOrigin) throw error('invalid_bridge');
     if (global.__naiaScreenAgentDispose) global.__naiaScreenAgentDispose();
-    let current = null, epoch = 0, disposed = false, pending = Promise.resolve();
-    const invalidate = () => { epoch++; current = null; };
+    const snapshots = new Map();
+    const now = () => global.performance?.now ? global.performance.now() : Date.now();
+    const pruneSnapshots = () => {
+      const time = now();
+      for (const [id, saved] of snapshots) if (time - saved.created >= SNAPSHOT_TTL_MS) snapshots.delete(id);
+      while (snapshots.size > MAX_SNAPSHOTS) snapshots.delete(snapshots.keys().next().value);
+    };
+    let epoch = 0, disposed = false, pending = Promise.resolve();
     // customSelects refreshes identical attributes/labels every 750ms. Ignore
     // no-op mutations, otherwise no snapshot would survive a round trip. A
     // replaced target is independently rejected by its identity/isConnected.
@@ -236,12 +248,12 @@
       return describe(record.addedNodes) !== describe(record.removedNodes);
     };
     function observeChanges(records) {
+      pruneSnapshots();
       for (const record of records) {
         if (!relevant(record)) continue;
         epoch++; // Captures still require a stable whole screen.
-        if (!current) continue;
         const host = record.target.nodeType === 1 ? record.target : record.target.parentElement;
-        for (const entry of current.entries.values()) {
+        for (const saved of snapshots.values()) for (const entry of saved.entries.values()) {
           // Background counters, thumbnail loads and unrelated panels must not
           // expire a stable Quick/menu button. Changes to that exact control,
           // its contents, or ancestor attributes still invalidate that target.
@@ -254,11 +266,17 @@
     const observer = new global.MutationObserver(observeChanges);
     observer.observe(doc.body, {subtree: true, childList: true, characterData: true, characterDataOldValue: true, attributes: true, attributeOldValue: true});
     const flush = () => observeChanges(observer.takeRecords());
-    const changed = event => { if (event.isTrusted) invalidate(); };
+    const changed = event => {
+      if (!event.isTrusted) return;
+      epoch++;
+      pruneSnapshots();
+      for (const saved of snapshots.values()) saved.userChanged = true;
+    };
     // A browser-generated scroll/resize is also isTrusted (scroll anchoring,
     // WebView viewport updates). It is not proof of a new user action. Keep
     // the token and recheck exact target identity, bounds, value and overlays
-    // when executing. Real pointer/keyboard input still invalidates globally.
+    // when executing. Real input blocks edits and page-wide scrolling, while
+    // an unchanged, audited navigation target can still be used.
     for (const name of ['pointerdown', 'keydown']) doc.addEventListener(name, changed, true);
     const layoutChanged = () => { epoch++; };
     doc.addEventListener('scroll', layoutChanged, true);
@@ -302,7 +320,7 @@
         if (part) text += (text ? '\n' : '') + part;
       }
       const random = global.crypto.randomUUID ? global.crypto.randomUUID() : Array.from(global.crypto.getRandomValues(new Uint32Array(4)), n => n.toString(36)).join('_');
-      const result = {agent_version: '0.2.3', snapshot_id: 'screen_' + random, title: 'NAIA', viewport: {width: global.innerWidth, height: global.innerHeight, scroll_x: global.scrollX, scroll_y: global.scrollY}, controls, text: text.slice(0, 12000), blocked: false};
+      const result = {agent_version: '0.2.4', snapshot_id: 'screen_' + random, title: 'NAIA', viewport: {width: global.innerWidth, height: global.innerHeight, scroll_x: global.scrollX, scroll_y: global.scrollY}, controls, text: text.slice(0, 12000), blocked: false};
       // Option dictionaries can be unusually large. Truncate options before
       // dropping controls, preserving all actionable target mappings.
       while (new TextEncoder().encode(JSON.stringify(result)).length > 260000) {
@@ -310,12 +328,14 @@
         if (!largest) throw error('screen_too_large');
         largest.options.splice(Math.max(0, Math.floor(largest.options.length / 2)));
       }
-      current = {id: result.snapshot_id, epoch, entries};
+      snapshots.set(result.snapshot_id, {created: now(), entries, userChanged: false});
+      pruneSnapshots();
       return result;
     }
     async function run(command) {
       const permissions = command.permissions || {}, args = command.arguments || {};
       if (permissions.screen !== true) throw error('screen_permission_required');
+      if (protectedScreen(doc)) throw error('protected_screen');
       if (command.name === 'naia_get_screen') {
         if (args.capture !== undefined && typeof args.capture !== 'boolean') throw error('invalid_arguments');
         flush();
@@ -329,14 +349,16 @@
       }
       if (command.name !== 'naia_ui_action') throw error('unknown_command');
       if (permissions.control !== true) throw error('control_permission_required');
-      if (protectedScreen(doc)) throw error('protected_screen');
       flush();
-      if (!current || typeof args.snapshot_id !== 'string' || args.snapshot_id !== current.id) throw error('stale_snapshot');
-      const entry = current.entries.get(args.target), action = args.action;
-      // Consume the token even when validation fails; callers must refresh.
-      current = null;
+      const saved = typeof args.snapshot_id === 'string' ? snapshots.get(args.snapshot_id) : null;
+      // Reads may overlap, but every attempted action consumes every old token.
+      // This prevents another saved view from replaying the same action.
+      snapshots.clear();
+      if (!saved) throw error('stale_snapshot');
+      const entry = saved.entries.get(args.target), action = args.action;
       if (!['click', 'fill', 'select', 'scroll'].includes(action)) throw error('invalid_action');
       if (action === 'scroll' && args.target === undefined) {
+        if (saved.userChanged) throw error('stale_user_input');
         if (!['up', 'down', 'left', 'right'].includes(args.direction)) throw error('invalid_direction');
         const amount = args.amount === undefined ? 500 : args.amount;
         if (!Number.isInteger(amount) || amount < 1 || amount > 2000) throw error('invalid_amount');
@@ -346,6 +368,7 @@
         if (!hittable(entry.el)) throw error('covered_control');
         const el = entry.source, p = entry.scrolling ? {actions: scrollable(el) ? ['scroll'] : [], edit: false} : policy(el);
         if (disabled(el) || !p.actions.includes(action)) throw error(p.reason || 'action_not_allowed');
+        if (saved.userChanged && !(p.edit === false && (action === 'click' || (entry.scrolling && action === 'scroll')))) throw error('stale_user_input');
         if (p.edit && permissions.edit !== true) throw error('edit_permission_required');
         if (action === 'click') {
           // Reject ancestors whose actual clickable child has another action.
@@ -377,14 +400,17 @@
         if (disposed) return;
         let result, is_error = false;
         try { result = await run(command); }
-        catch (e) { current = null; result = {error: {code: typeof e.code === 'string' ? e.code : 'screen_action_failed'}}; is_error = true; }
+        catch (e) {
+          if (command.name === 'naia_ui_action' || e.code === 'protected_screen') snapshots.clear();
+          result = {error: {code: typeof e.code === 'string' ? e.code : 'screen_action_failed'}}; is_error = true;
+        }
         if (!disposed) frame.contentWindow.postMessage({type: 'naia-ui-result', id: command.id, result, is_error}, panelOrigin);
       });
     };
     global.addEventListener('message', receive);
     frame.contentWindow.postMessage({type: 'naia-ui-ready'}, panelOrigin);
     global.__naiaScreenAgentDispose = () => {
-      disposed = true; current = null; observer.disconnect();
+      disposed = true; snapshots.clear(); observer.disconnect();
       global.removeEventListener('message', receive); global.removeEventListener('resize', layoutChanged);
       for (const name of ['pointerdown', 'keydown']) doc.removeEventListener(name, changed, true);
       doc.removeEventListener('scroll', layoutChanged, true);

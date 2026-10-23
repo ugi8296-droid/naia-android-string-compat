@@ -148,6 +148,39 @@ class ScreenServiceTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(mod.ScreenError, "^protected_screen$"):
             await task
 
+    async def test_snapshot_action_cannot_move_to_a_different_browser(self):
+        task, command = await self.claimed()
+        self.service.submit(CLIENT, {"id": command["id"], "result": snapshot(), "is_error": False})
+        await task
+        self.now += 7
+        self.assertTrue(self.service.poll(OTHER)["active"])
+        with self.assertRaisesRegex(mod.ScreenError, "screen_session_changed"):
+            await self.service.request("naia_ui_action", {"snapshot_id": "screen_abc123", "action": "click", "target": "t1"}, self.guard)
+        self.assertEqual(self.service.poll(OTHER)["commands"], [])
+
+    async def test_read_snapshot_survives_another_read_but_action_consumes_both(self):
+        for identifier in ("screen_first", "screen_second"):
+            task, command = await self.claimed()
+            self.service.submit(CLIENT, {"id": command["id"], "result": snapshot(snapshot_id=identifier), "is_error": False})
+            await task
+        args = {"snapshot_id": "screen_first", "action": "click", "target": "t1"}
+        task, command = await self.claimed("naia_ui_action", args)
+        self.service.submit(CLIENT, {"id": command["id"], "result": snapshot(snapshot_id="screen_after"), "is_error": False})
+        await task
+        for identifier in ("screen_first", "screen_second"):
+            with self.assertRaisesRegex(mod.ScreenError, "stale_snapshot"):
+                await self.service.request("naia_ui_action", {**args, "snapshot_id": identifier}, self.guard)
+
+    async def test_expired_snapshot_never_dispatches_an_action(self):
+        task, command = await self.claimed()
+        self.service.submit(CLIENT, {"id": command["id"], "result": snapshot(), "is_error": False})
+        await task
+        self.now += 121
+        self.service.poll(CLIENT)
+        with self.assertRaisesRegex(mod.ScreenError, "stale_snapshot"):
+            await self.service.request("naia_ui_action", {"snapshot_id": "screen_abc123", "action": "click", "target": "t1"}, self.guard)
+        self.assertEqual(self.service.poll(CLIENT)["commands"], [])
+
     async def test_capture_validates_jpeg_and_explicit_request(self):
         task, command = await self.claimed(arguments={"capture": True})
         self.service.submit(CLIENT, {"id": command["id"], "result": snapshot(image=tiny_jpeg()), "is_error": False})

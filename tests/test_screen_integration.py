@@ -192,8 +192,9 @@ class ScreenIntegrationTests(unittest.TestCase):
 
     def test_edit_revoked_after_fill_handoff_discards_result(self):
         self.controller.update_settings({"allow_control": True, "allow_edit": True})
+        _, screen = self.completed()
         future, local = self.begin(self.command("naia_ui_action",
-            {"snapshot_id": "screen_prior", "action": "fill", "target": "t1", "value": "changed"}))
+            {"snapshot_id": screen["snapshot_id"], "action": "fill", "target": "t1", "value": "changed"}))
         self.controller.update_settings({"allow_edit": False})
         result, failed = self.finish(future, local)
         self.assertTrue(failed)
@@ -237,8 +238,9 @@ class ScreenIntegrationTests(unittest.TestCase):
 
     def test_revoked_screen_not_replayed_from_completed_ui_action(self):
         self.controller.update_settings({"allow_control": True})
+        _, screen = self.completed()
         command, _ = self.completed("naia_ui_action",
-            {"snapshot_id": "screen_prior", "action": "click", "target": "t1"})
+            {"snapshot_id": screen["snapshot_id"], "action": "click", "target": "t1"})
         self.controller.update_settings({"allow_screen": False})
         result, failed = self.bridge._handle(command)
         self.assertTrue(failed)

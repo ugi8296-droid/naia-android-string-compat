@@ -1,7 +1,7 @@
 {
   "id": "naia_zz_android_tools_v1",
-  "name": "NAIA Android 도구 0.2.3",
-  "version": "0.2.3",
+  "name": "NAIA Android 도구 0.2.4",
+  "version": "0.2.4",
   "naia_ext_api": 1,
   "entry": "main.py",
   "description": "작가 썸네일 저메모리 모드, 폴더 열기, 개인용 ChatGPT 연결 및 앱 화면 조회·캡처·허용된 메뉴 조작. NAIA v2.0.48 전용. 화면·조작·수정·생성 권한은 각각 선택하며 Settings·인증·연결 설정 접근은 차단합니다."

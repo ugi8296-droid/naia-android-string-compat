@@ -229,6 +229,7 @@ class ScreenService:
         self.timeout, self.lease, self.clock = timeout, lease, clock
         self._lock = threading.RLock()
         self._client, self._seen, self._pending, self._closed = None, 0.0, None, False
+        self._snapshots = {}  # Bounded snapshot -> (browser client, expiry).
 
     @staticmethod
     def _client_id(value):
@@ -270,6 +271,7 @@ class ScreenService:
 
     def _expire_locked(self):
         now = self.clock()
+        self._snapshots = {key: value for key, value in self._snapshots.items() if value[1] > now}
         pending = self._pending
         if pending and now >= pending.deadline:
             self._finish_locked(pending, error=ScreenError("screen_request_expired"))
@@ -299,6 +301,15 @@ class ScreenService:
                 raise ScreenError("screen_not_ready")
             if self._pending is not None:
                 raise ScreenError("screen_busy")
+            if name == "naia_ui_action":
+                snapshot = self._snapshots.get(arguments["snapshot_id"])
+                if snapshot is None:
+                    raise ScreenError("stale_snapshot")
+                if snapshot[0] != self._client:
+                    raise ScreenError("screen_session_changed")
+                # A command must never migrate to another browser after a lease
+                # handoff, or be replayed through a second recent snapshot.
+                self._snapshots.clear()
             pending.client = self._client
             self._pending = pending
         try:
@@ -359,12 +370,16 @@ class ScreenService:
             except ScreenError as error:
                 self._finish_locked(pending, error=error)
             else:
+                self._snapshots[result["snapshot_id"]] = (pending.client, self.clock() + 120)
+                while len(self._snapshots) > 4:
+                    del self._snapshots[next(iter(self._snapshots))]
                 self._finish_locked(pending, result=result)
             return {"accepted": True}
 
     def close(self):
         with self._lock:
             self._closed, self._client = True, None
+            self._snapshots.clear()
             if self._pending:
                 self._finish_locked(self._pending, error=ScreenError("screen_service_closed"))
 
