@@ -15,11 +15,11 @@
 <div class="row"><label for="plugin_enabled">플러그인 연결 사용</label><input id="plugin_enabled" type="checkbox"></div>
 <div class="row"><label for="allow_read">현재 프롬프트·설정 읽기 허용</label><input id="allow_read" type="checkbox"></div>
 <div class="row"><label for="allow_screen">앱 화면 보기·캡처 허용</label><input id="allow_screen" type="checkbox"></div>
-<div class="row"><label for="allow_control">메뉴 이동·클릭·스크롤 허용</label><input id="allow_control" type="checkbox"></div>
-<div class="row"><label for="allow_edit">프롬프트·생성 옵션 수정 허용</label><input id="allow_edit" type="checkbox"></div>
-<div class="row"><label for="allow_generate">이미지 생성 요청 허용</label><input id="allow_generate" type="checkbox"></div>
+<div class="row"><label for="allow_control">전체 화면 조작 허용</label><input id="allow_control" type="checkbox"></div>
+<div class="row"><label for="allow_edit">별도 프롬프트 수정 도구 허용</label><input id="allow_edit" type="checkbox"></div>
+<div class="row"><label for="allow_generate">별도 이미지 생성 도구 허용</label><input id="allow_generate" type="checkbox"></div>
 <p>이미지 생성은 연결된 NovelAI 계정을 사용하며 해당 이용 한도와 잔액이 적용됩니다.</p>
-<p>화면 조작은 화면 보기 권한도 필요합니다. 입력값 변경에는 수정 권한도 필요합니다. Settings·인증·API 키·연결 설정은 항상 차단하며, 생성은 별도 생성 요청으로만 허용합니다.</p>
+<p>전체 화면 조작에는 Settings·입력·생성·파일 버튼도 포함됩니다. AI가 요청받은 작업을 화면에서 수행합니다. 비밀번호·인증 키 값은 화면 공유 시 가립니다. 별도 수정·생성 도구 스위치는 화면 버튼 조작을 제한하지 않습니다.</p>
 <div id="screenState" role="status"></div>
 <div id="bridgeState" role="status"></div>
 <div class="actions"><button id="openRelay">연결 페이지 열기</button><button id="disconnect">기기 연결 해제</button></div>

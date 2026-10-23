@@ -26,7 +26,7 @@ class Element {
   matches(selectors) {
     return selectors.split(',').some(selector => {
       selector = selector.trim();
-      const tag = selector.match(/^[A-Za-z]+/);
+      const tag = selector.match(/^[A-Za-z][A-Za-z0-9]*/);
       if (tag && tag[0].toUpperCase() !== this.tagName) return false;
       for (const m of selector.matchAll(/#([\w-]+)/g)) if (this.id !== m[1]) return false;
       for (const m of selector.matchAll(/\.([\w-]+)/g)) if (!this.classList.contains(m[1])) return false;
@@ -40,7 +40,7 @@ class Element {
   closest(selector) { for (let n = this; n; n = n.parentElement) if (n.matches(selector)) return n; return null; }
   contains(other) { for (let n = other; n; n = n.parentElement) if (n === this) return true; return false; }
   getBoundingClientRect() { return this.rect; }
-  click() { this.clicks++; if (this.type === 'checkbox') this.checked = !this.checked; }
+  click() { this.clicks++; if (this.type === 'checkbox') this.checked = !this.checked; if (this.type === 'radio') this.checked = true; }
   dispatchEvent(event) { this.events.push(event.type); }
   scrollBy({top, left}) { this.scrollTop += top; this.scrollLeft += left; }
 }
@@ -66,12 +66,13 @@ function fixture() {
   const window = {
     document: doc, innerWidth: 1000, innerHeight: 800, scrollX: 0, scrollY: 0, crypto: webcrypto,
     performance: {now: () => clock},
-    getComputedStyle: () => ({display: 'block', visibility: 'visible', opacity: '1', overflow: 'visible', overflowX: 'visible', overflowY: 'visible'}),
+    html2canvas: async () => ({width:1000,height:800,toDataURL:()=> 'data:image/jpeg;base64,/9j/2Q=='}),
+    getComputedStyle: el => ({display: el.hidden ? 'none' : 'block', visibility: 'visible', opacity: '1', overflow: 'visible', overflowX: 'visible', overflowY: 'visible'}),
     HTMLInputElement: Input, HTMLSelectElement: Select, HTMLTextAreaElement: Textarea,
     Event: class { constructor(type) { this.type = type; } },
     MutationObserver: class { constructor(callback) { this.callback = callback; this.records = []; observers.push(this); } observe() {} disconnect() {} takeRecords() { return this.records.splice(0); } },
     addEventListener: (name, handler) => listeners.set(name, handler),
-    removeEventListener: name => listeners.delete(name), setTimeout: callback => setImmediate(callback),
+    removeEventListener: name => listeners.delete(name), setTimeout: callback => setImmediate(callback), clearTimeout: clearImmediate,
     scrollBy({top, left}) { this.scrollX += left; this.scrollY += top; },
   };
   const context = vm.createContext({window, globalThis: window, module: {exports: {}}, URL, TextEncoder, Uint32Array, console});
@@ -107,17 +108,18 @@ test('only the exact trusted panel can send commands; handshake is acknowledged'
   assert.equal(f.messages.at(-1).message.type, 'naia-ui-ready');
 });
 
-test('screen and edit are separate permissions; generic generation stays blocked', async () => {
+test('screen/control consent gates generic controls without per-function restrictions', async () => {
   const f = fixture();
-  f.add('TEXTAREA', {id: 'promptEdit'});
-  f.add('BUTTON', {id: 'btnGen', onclick: 'generateAction()'});
-  assert.equal((await f.call('naia_get_screen', {}, {screen: false})).result.error.code, 'screen_permission_required');
-  const response = await f.call('naia_get_screen', {}, {...f.permissions, edit: false, generate: true});
-  assert.equal(response.result.controls.find(c => c.label === 'promptEdit').blocked_reason, 'edit_permission_required');
-  assert.equal(response.result.controls.find(c => c.label === 'btnGen').actions.length, 0);
-  const target = response.result.controls.find(c => c.label === 'btnGen').target;
-  const action = await f.call('naia_ui_action', {snapshot_id: response.result.snapshot_id, action: 'click', target}, {...f.permissions, generate: true});
-  assert.equal(action.is_error, true);
+  f.add('TEXTAREA', {id:'promptEdit'});f.add('BUTTON', {id:'btnGen', onclick:'generateAction()'});
+  assert.equal((await f.call('naia_get_screen', {}, {screen:false})).result.error.code, 'screen_permission_required');
+  const permissions={...f.permissions,edit:false,generate:false};
+  const response=await f.call('naia_get_screen', {}, permissions);
+  assert.deepEqual(response.result.controls.find(c=>c.label==='promptEdit').actions,['fill']);
+  const button=response.result.controls.find(c=>c.label==='btnGen');assert.deepEqual(button.actions,['click']);
+  const action=await f.call('naia_ui_action',{snapshot_id:response.result.snapshot_id,target:button.target,action:'click'},permissions);
+  assert.equal(action.is_error,false);
+  const readOnly=await f.call('naia_get_screen',{}, {...permissions,control:false});
+  assert.ok(readOnly.result.controls.every(c=>c.actions.length===0));
 });
 
 test('field edits dispatch input and change; successful action consumes token', async () => {
@@ -126,15 +128,15 @@ test('field edits dispatch input and change; successful action consumes token', 
   const action = {snapshot_id: screen.snapshot_id, target: screen.controls[0].target, action: 'fill', value: 'two people'};
   const result = await f.call('naia_ui_action', action);
   assert.equal(result.is_error, false); assert.equal(prompt.value, 'two people');
-  assert.deepEqual(prompt.events, ['input', 'change']); assert.equal(result.result.image, undefined);
+  assert.deepEqual(prompt.events, ['input', 'change']); assert.equal(result.result.image.mimeType, 'image/jpeg');
   assert.equal((await f.call('naia_ui_action', action)).result.error.code, 'stale_snapshot');
 });
 
-test('read/search field fill still requires edit, matching broker policy', async () => {
-  const f = fixture(); f.add('INPUT', {id: 'artistThumbSearch'});
-  const {result: screen} = await f.call('naia_get_screen');
-  const result = await f.call('naia_ui_action', {snapshot_id: screen.snapshot_id, target: screen.controls[0].target, action: 'fill', value: 'test'}, {...f.permissions, edit: false});
-  assert.equal(result.result.error.code, 'edit_permission_required');
+test('visible search fields use generic control permission', async () => {
+  const f=fixture(),field=f.add('INPUT',{id:'artistThumbSearch'});
+  const screen=(await f.call('naia_get_screen')).result;
+  const result=await f.call('naia_ui_action',{snapshot_id:screen.snapshot_id,target:screen.controls[0].target,action:'fill',value:'test'},{...f.permissions,edit:false});
+  assert.equal(result.is_error,false);assert.equal(field.value,'test');
 });
 
 test('DOM mutation, changed value, and replaced target each reject stale action', async () => {
@@ -165,33 +167,32 @@ test('covered controls cannot be clicked through an overlay', async () => {
   assert.equal(result.result.error.code, 'covered_control'); assert.equal(button.clicks, 0);
 });
 
-test('protected settings reject both snapshot and capture before rendering', async () => {
-  const f = fixture(); f.add('DIV', {id: 'rightTabSettings'});
-  let captures = 0; f.window.html2canvas = () => { captures++; };
-  for (const capture of [false, true]) assert.equal((await f.call('naia_get_screen', {capture})).result.error.code, 'protected_screen');
-  assert.equal(captures, 0);
+test('Settings and login screens stay readable while credential values are redacted', async () => {
+  const f=fixture(),settings=f.add('DIV',{id:'rightTabSettings'});
+  const key=f.add('INPUT',{id:'naiApiKey',type:'password'},settings);key.value='PRIVATE_KEY_VALUE';
+  f.add('BUTTON',{id:'apiLogin',label:'Login'},settings);
+  const result=await f.call('naia_get_screen');
+  assert.equal(result.is_error,false);assert.equal(result.result.image.mimeType,'image/jpeg');
+  assert.ok(!JSON.stringify(result).includes('PRIVATE_KEY_VALUE'));
+  assert.equal(result.result.controls.find(c=>c.label==='naiApiKey').value,'[redacted]');
+  assert.deepEqual(result.result.controls.find(c=>c.label==='Login').actions,['click']);
 });
 
-test('custom select adapter uses native value, blocks artist open-folder sentinel', async () => {
-  const f = fixture();
-  const select = f.add('SELECT', {id: 'artistThumbMode', class: 'native-select-hidden', 'aria-hidden': 'true'});
-  select.options = [{value: 'regular', label: 'Regular'}, {value: '__artist_thumb_open_folder__', label: 'Open folder'}];
-  const wrapper = f.add('DIV', {class: 'custom-select'}); wrapper.previousElementSibling = select;
-  const button = f.add('BUTTON', {class: 'custom-select-button'}, wrapper);
-  const {result: screen} = await f.call('naia_get_screen');
-  const field = screen.controls.find(c => c.role === 'combobox');
-  assert.deepEqual(field.options.map(o => o.value), ['regular']);
-  assert.equal((await f.call('naia_ui_action', {snapshot_id: screen.snapshot_id, target: field.target, action: 'select', value: '__artist_thumb_open_folder__'})).result.error.code, 'invalid_option');
-  const next = (await f.call('naia_get_screen')).result;
-  assert.equal((await f.call('naia_ui_action', {snapshot_id: next.snapshot_id, target: next.controls.find(c => c.role === 'combobox').target, action: 'select', value: 'regular'})).is_error, false);
-  assert.equal(select.value, 'regular'); assert.equal(button.clicks, 0);
+test('custom select face exposes all enabled native options including folder action', async () => {
+  const f=fixture();
+  const select=f.add('SELECT',{id:'artistThumbMode',class:'native-select-hidden','aria-hidden':'true'});select.hidden=true;
+  select.options=[{value:'regular',label:'Regular'},{value:'__artist_thumb_open_folder__',label:'Open folder'},{value:'disabled',label:'Disabled',disabled:true}];
+  const wrapper=f.add('DIV',{class:'custom-select'});wrapper.previousElementSibling=select;
+  const button=f.add('BUTTON',{class:'custom-select-button'},wrapper);
+  const screen=(await f.call('naia_get_screen')).result,field=screen.controls.find(c=>c.role==='combobox');
+  assert.deepEqual(field.options.map(o=>o.value),['regular','__artist_thumb_open_folder__']);
+  const result=await f.call('naia_ui_action',{snapshot_id:screen.snapshot_id,target:field.target,action:'select',value:'__artist_thumb_open_folder__'});
+  assert.equal(result.is_error,false);assert.equal(select.value,'__artist_thumb_open_folder__');assert.equal(button.clicks,0);
 });
 
-test('studio allows audited navigation/edits, blocks generation/files/deletion and unknown buttons', () => {
-  const f = fixture(), studio = f.add('DIV', {id: 'studioRoot'});
-  for (const action of ['toggle-global', 'close-editor']) assert.equal(f.policy(f.add('BUTTON', {'data-studio-action': action}, studio)).edit, false);
-  for (const action of ['add-frame', 'apply-current']) assert.equal(f.policy(f.add('BUTTON', {'data-studio-action': action}, studio)).edit, true);
-  for (const action of ['generate-selected', 'start-sequence', 'export-board', 'import-board', 'delete-frame', 'surprise']) assert.equal(f.policy(f.add('BUTTON', {'data-studio-action': action}, studio)).actions.length, 0);
+test('studio generation, files, deletion and unfamiliar buttons are observable controls', () => {
+  const f=fixture(),studio=f.add('DIV',{id:'studioRoot'});
+  for(const action of ['toggle-global','add-frame','generate-selected','start-sequence','export-board','import-board','delete-frame','surprise'])assert.deepEqual(Array.from(f.policy(f.add('BUTTON',{'data-studio-action':action},studio)).actions),['click']);
 });
 
 test('scroll accepts schema maximum 2000 and cannot reuse a consumed token', async () => {
@@ -200,7 +201,7 @@ test('scroll accepts schema maximum 2000 and cannot reuse a consumed token', asy
   assert.equal(response.is_error, false); assert.equal(f.window.scrollY, 2000);
 });
 
-test('capture bounds canvas at1600, ignores sensitive fields/iframes, releases canvas', async () => {
+test('capture bounds canvas at1600, excludes iframes and releases canvas', async () => {
   const f = fixture(); f.window.innerWidth = 2400; f.window.innerHeight = 1800;
   let options; const canvas = {width: 1600, height: 1200, toDataURL: () => 'data:image/jpeg;base64,/9j/2Q=='};
   f.window.html2canvas = async (_body, value) => { options = value; return canvas; };
@@ -208,7 +209,7 @@ test('capture bounds canvas at1600, ignores sensitive fields/iframes, releases c
   assert.equal(response.is_error, false); assert.equal(response.result.image.width, 1600);
   assert.equal(options.scale, 2 / 3); assert.equal(options.allowTaint, false);
   assert.equal(options.ignoreElements(new Element('IFRAME')), true);
-  assert.equal(options.ignoreElements(new Input('INPUT', {type: 'password'})), true);
+  assert.equal(options.ignoreElements(new Input('INPUT', {type: 'password'})), false);
   assert.equal(canvas.width, 0); assert.equal(canvas.height, 0);
 });
 
@@ -236,36 +237,30 @@ test('actual target and ancestor changes still reject saved navigation clicks', 
   }
 });
 
-test('Android view switch works without edit permission; unsafe lookalikes stay blocked', async () => {
-  const f = fixture(), button = f.add('BUTTON', {label:'간편 화면 ▾', title:'간편 화면 사용 중. 전체 기능을 보려면 전체 화면으로 전환'});
-  const {result: screen} = await f.call('naia_get_screen', {}, {...f.permissions, edit:false});
-  const response = await f.call('naia_ui_action', {snapshot_id:screen.snapshot_id, target:screen.controls[0].target, action:'click'}, {...f.permissions, edit:false});
-  assert.equal(response.is_error, false); assert.equal(button.clicks, 1);
-  for (const onclick of ['generateAction()', 'deleteFrame()', 'openSaveDirectoryPanel()', 'openApiPopup()']) {
-    assert.deepEqual(f.policy(f.add('BUTTON', {label:'전체 화면', onclick})).actions.length, 0);
-  }
-  assert.equal(f.policy(f.add('BUTTON', {label:'Unknown action'})).actions.length, 0);
+test('Android view switch and Settings buttons use ordinary observed click targets', async () => {
+  const f=fixture(),button=f.add('BUTTON',{label:'간편 화면 ▾',title:'간편 화면 사용 중. 전체 기능을 보려면 전체 화면으로 전환'});
+  const screen=(await f.call('naia_get_screen',{}, {...f.permissions,edit:false})).result;
+  assert.equal((await f.call('naia_ui_action',{snapshot_id:screen.snapshot_id,target:screen.controls[0].target,action:'click'},{...f.permissions,edit:false})).is_error,false);
+  assert.equal(button.clicks,1);
+  for(const onclick of ['generateAction()','deleteFrame()','openSaveDirectoryPanel()','openApiPopup()'])assert.equal(f.policy(f.add('BUTTON',{onclick})).actions[0],'click');
 });
 
-test('standard navigation destinations allow tabs but never settings', () => {
-  const f = fixture(); f.add('DIV', {id:'galleryPanel'}); f.add('DIV', {id:'settingsRoot'});
-  assert.equal(f.policy(f.add('BUTTON', {role:'tab', 'aria-controls':'galleryPanel'})).actions[0], 'click');
-  assert.equal(f.policy(f.add('BUTTON', {role:'tab', 'aria-controls':'settingsRoot'})).actions.length, 0);
+test('tabs including Settings do not need pre-registered handlers', () => {
+  const f=fixture();
+  for(const destination of ['galleryPanel','settingsRoot','newPanel'])assert.equal(f.policy(f.add('BUTTON',{role:'tab','aria-controls':destination})).actions[0],'click');
 });
 
-test('new protected screen blocks action even when original button is unchanged', async () => {
-  const f = fixture(); f.add('BUTTON', {onclick:'toggleTagFilter()'});
-  const {result: screen} = await f.call('naia_get_screen');
-  f.add('DIV', {id:'settingsRoot'});
-  const response = await f.call('naia_ui_action', {snapshot_id:screen.snapshot_id, target:screen.controls[0].target, action:'click'});
-  assert.equal(response.result.error.code, 'protected_screen');
+test('opening a Settings root does not block an unchanged unobscured menu', async () => {
+  const f=fixture(),button=f.add('BUTTON',{onclick:'toggleTagFilter()'});
+  const screen=(await f.call('naia_get_screen')).result;f.add('DIV',{id:'settingsRoot'});
+  const response=await f.call('naia_ui_action',{snapshot_id:screen.snapshot_id,target:screen.controls[0].target,action:'click'});
+  assert.equal(response.is_error,false);assert.equal(button.clicks,1);
 });
-
 
 test('branded Android shell view switch uses exact observed title and reports agent version', async () => {
   const f = fixture(), button = f.add('DIV', {role:'button', label:'NAIA2 간편 화면 ▾', title:'간편 화면 사용 중. 전체 기능을 보려면 전체 화면으로 전환'});
   const {result: screen} = await f.call('naia_get_screen');
-  assert.equal(screen.agent_version, '0.2.4');
+  assert.equal(screen.agent_version, '0.2.5');
   const result = await f.call('naia_ui_action', {snapshot_id:screen.snapshot_id,target:screen.controls[0].target,action:'click'});
   assert.equal(result.is_error, false);assert.equal(button.clicks,1);
 });
@@ -302,8 +297,8 @@ test('unrelated trusted touch and keyboard input preserve only unchanged navigat
   }
 });
 
-test('trusted input still rejects field edits, edit buttons and whole-page scroll', async () => {
-  for (const mode of ['fill', 'edit-click', 'page-scroll']) {
+test('trusted input still rejects conflicting field edits and whole-page scroll', async () => {
+  for (const mode of ['fill', 'page-scroll']) {
     const f = fixture();
     const target = mode === 'fill' ? f.add('TEXTAREA', {id:'promptEdit'}) : f.add('BUTTON', {id:'artistThumbInsertBtn'});
     const screen = (await f.call('naia_get_screen')).result;
@@ -361,29 +356,128 @@ test('snapshots expire after 120 seconds and only the most recent four are retai
   }
 });
 
-test('failed read preserves a safe snapshot, protected-screen read clears it', async () => {
-  for (const protectedView of [false, true]) {
-    const f = fixture(), quick = f.add('BUTTON', {onclick:'openFnQuick()'});
-    const screen = (await f.call('naia_get_screen')).result;
-    const settings = protectedView ? f.add('DIV', {id:'settingsRoot'}) : null;
-    const failed = await f.call('naia_get_screen', {capture:true});
-    assert.equal(failed.is_error, true);
-    if (settings) settings.hidden = true;
-    const response = await f.call('naia_ui_action', {snapshot_id:screen.snapshot_id, target:screen.controls[0].target, action:'click'});
-    assert.equal(response.is_error, protectedView); assert.equal(quick.clicks, protectedView ? 0 : 1);
+test('capture failure reports the missing image and preserves valid prior targets', async () => {
+  const f=fixture(),quick=f.add('BUTTON',{onclick:'openFnQuick()'});
+  const screen=(await f.call('naia_get_screen')).result;
+  delete f.window.html2canvas;f.add('DIV',{id:'settingsRoot'});
+  const read=await f.call('naia_get_screen');assert.equal(read.is_error,false);assert.equal(read.result.capture_error,'capture_unavailable');assert.equal(read.result.image,undefined);
+  const response=await f.call('naia_ui_action',{snapshot_id:screen.snapshot_id,target:screen.controls[0].target,action:'click'});
+  assert.equal(response.is_error,false);assert.equal(response.result.capture_error,'capture_unavailable');assert.equal(quick.clicks,1);
+});
+
+test('focusable shell controls and forms do not require a recognized label', async () => {
+  const f=fixture(),form=f.add('FORM'),button=f.add('DIV',{tabindex:'0',label:'NAIA2 ▾'},form);
+  const screen=(await f.call('naia_get_screen')).result;
+  const response=await f.call('naia_ui_action',{snapshot_id:screen.snapshot_id,target:screen.controls[0].target,action:'click'});
+  assert.equal(response.is_error,false);assert.equal(button.clicks,1);
+  assert.equal(f.policy(f.add('DIV',{title:'plain noninteractive text'})).actions.length,0);
+});
+
+test('native checkbox, radio and contenteditable fields are controllable without edit scope', async () => {
+  for (const kind of ['checkbox', 'radio', 'contenteditable']) {
+    const f=fixture();
+    const field=kind==='contenteditable'?f.add('DIV',{contenteditable:'true',label:'Editable'}):f.add('INPUT',{type:kind,id:kind});
+    const permissions={...f.permissions,edit:false};
+    const screen=(await f.call('naia_get_screen',{},permissions)).result;
+    const args={snapshot_id:screen.snapshot_id,target:screen.controls[0].target,action:kind==='contenteditable'?'fill':'click'};
+    if(kind==='contenteditable')args.value='typed text';
+    assert.equal((await f.call('naia_ui_action',args,permissions)).is_error,false);
+    if(kind==='contenteditable'){assert.equal(field.textContent,'typed text');assert.deepEqual(field.events,['input','change']);}
+    else assert.equal(field.checked,true);
   }
 });
 
-test('focusable Android switch accepts normalized exact title but blocks unsafe lookalikes', async () => {
-  for (const title of ['  간편 화면 사용 중.\n 전체 기능을 보려면 전체 화면으로 전환  ', '전체 화면 사용 중.\t 간편 화면으로 전환']) {
-    const f = fixture(), button = f.add('DIV', {tabindex:'0', label:'NAIA2 ▾', title});
-    const screen = (await f.call('naia_get_screen')).result;
-    const response = await f.call('naia_ui_action', {snapshot_id:screen.snapshot_id, target:screen.controls[0].target, action:'click'});
-    assert.equal(response.is_error, false); assert.equal(button.clicks, 1);
-    const form = f.add('FORM');
-    assert.equal(f.policy(f.add('DIV', {tabindex:'0', title}, form)).actions.length, 0);
-    assert.equal(f.policy(f.add('DIV', {tabindex:'0', title, onclick:'generateAction()'})).actions.length, 0);
-    assert.equal(f.policy(f.add('DIV', {tabindex:'0', title:title + ' more'})).actions.length, 0);
-    assert.equal(f.policy(f.add('DIV', {title})).actions.length, 0);
+test('unlabelled pointer-cursor shell switches remain observed and clickable', async () => {
+  const f=fixture(),switcher=f.add('H1',{label:'NAIA2 간편 화면'});
+  const style=f.window.getComputedStyle;
+  f.window.getComputedStyle=el=>({...style(el),cursor:el===switcher?'pointer':'auto'});
+  const screen=(await f.call('naia_get_screen')).result;
+  assert.equal(screen.controls[0].label,'NAIA2 간편 화면');
+  assert.equal((await f.call('naia_ui_action',{snapshot_id:screen.snapshot_id,target:screen.controls[0].target,action:'click'})).is_error,false);
+  assert.equal(switcher.clicks,1);
+});
+
+test('visible fixed drawer tabs survive zero-height overflow ancestors and aria-hidden semantics', async () => {
+  const f=fixture(),wrapper=f.add('DIV',{'aria-hidden':'true'});
+  wrapper.rect={x:0,y:0,left:0,top:0,right:100,bottom:0,width:100,height:0};
+  const tab=f.add('BUTTON',{'data-tab':'params',class:'tab-btn',label:'PARAMS'},wrapper);
+  const style=f.window.getComputedStyle;
+  f.window.getComputedStyle=el=>({...style(el),overflow:el===wrapper?'hidden':'visible',position:el===tab?'fixed':'static'});
+  // aria-hidden is an accessibility hint, not visual CSS. The actual hit is
+  // decisive even when an application leaves that hint on a visible wrapper.
+  f.doc.elementFromPoint=()=>tab;
+  const screen=(await f.call('naia_get_screen')).result;
+  assert.equal(screen.controls[0].label,'PARAMS');assert.deepEqual(screen.controls[0].actions,['click']);
+});
+
+test('id-less Prompt Params Negative and right tabs precede large thumbnail grids', async () => {
+  const f=fixture(),grid=f.add('DIV',{id:'artistThumbGrid'});
+  for(let i=0;i<180;i++){
+    const item=f.add('BUTTON',{id:'artist_'+i,label:'Artist '+i},grid);
+    item.rect={x:0,y:100,left:0,top:100,right:100,bottom:124,width:100,height:24};
   }
+  for(const [i,label] of ['PROMPT','PARAMS','NEGATIVE','Settings'].entries()){
+    const tab=f.add('BUTTON',{class:i===3?'right-tab-btn':'tab-btn',label,'data-tab':label});
+    tab.rect={x:i*110,y:10,left:i*110,top:10,right:i*110+100,bottom:34,width:100,height:24};
+  }
+  const screen=(await f.call('naia_get_screen',{capture:false})).result;
+  assert.deepEqual(screen.controls.slice(0,4).map(c=>c.label),['PROMPT','PARAMS','NEGATIVE','Settings']);
+  assert.ok(screen.controls.length<=160);
+});
+
+test('default and post-action observations contain images despite background DOM mutations', async () => {
+  const f=fixture(),button=f.add('BUTTON',{label:'Quick'}),counter=f.add('SPAN',{id:'counter'});
+  let rendered=0;
+  f.window.html2canvas=async()=>{
+    rendered++;counter.attrs.title='counter '+rendered;
+    f.observers[0].callback([{type:'attributes',target:counter,attributeName:'title',oldValue:null}]);
+    return{width:1000,height:800,toDataURL:()=> 'data:image/jpeg;base64,/9j/2Q=='};
+  };
+  const screen=(await f.call('naia_get_screen')).result;
+  assert.ok(screen.image);assert.equal(screen.capture_error,undefined);
+  const response=await f.call('naia_ui_action',{snapshot_id:screen.snapshot_id,target:screen.controls[0].target,action:'click'});
+  assert.equal(response.is_error,false);assert.ok(response.result.image);assert.equal(button.clicks,1);assert.equal(rendered,2);
+  const textOnly=await f.call('naia_get_screen',{capture:false});assert.equal(textOnly.result.image,undefined);assert.equal(rendered,2);
+});
+
+test('user or viewport change during capture is reported without returning mismatched pixels', async () => {
+  for(const kind of ['input','viewport']){
+    const f=fixture();
+    f.window.html2canvas=async()=>{
+      if(kind==='input')f.listeners.get('doc:pointerdown')({isTrusted:true});else f.window.innerWidth+=20;
+      return{width:1000,height:800,toDataURL:()=> 'data:image/jpeg;base64,/9j/2Q=='};
+    };
+    const response=await f.call('naia_get_screen');
+    assert.equal(response.is_error,false);assert.equal(response.result.capture_error,'screen_changed_during_capture');assert.equal(response.result.image,undefined);
+  }
+});
+
+test('post-action capture timeout preserves completed action and releases a late canvas', async () => {
+  const f=fixture(),button=f.add('BUTTON',{label:'Quick'});
+  const screen=(await f.call('naia_get_screen')).result;
+  let finish;
+  f.window.html2canvas=()=>new Promise(resolve=>{finish=resolve;});
+  const args={snapshot_id:screen.snapshot_id,target:screen.controls[0].target,action:'click'};
+  const response=await f.call('naia_ui_action',args);
+  assert.equal(response.is_error,false);assert.equal(response.result.capture_error,'capture_timeout');assert.equal(button.clicks,1);
+  const late={width:1000,height:800};finish(late);await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(late.width,0);assert.equal(late.height,0);
+  assert.equal((await f.call('naia_ui_action',args)).result.error.code,'stale_snapshot');assert.equal(button.clicks,1);
+});
+
+test('capture clone masks credential fields and echoed values but keeps Settings content', async () => {
+  const f=fixture();
+  let cloneKey,echo;
+  f.window.html2canvas=async(_body,options)=>{
+    cloneKey=new Input('INPUT',{id:'naiApiKey',type:'text'});cloneKey.value='SECRET_TOKEN_123';
+    const settings=new Element('DIV',{id:'settingsRoot'});
+    echo={textContent:'Value: SECRET_TOKEN_123'};
+    let visited=false;
+    const clone={body:settings,querySelectorAll:selector=>[cloneKey].filter(el=>el.matches(selector)),createTreeWalker:()=>({currentNode:echo,nextNode:()=>visited?false:(visited=true)})};
+    options.onclone(clone);
+    assert.equal(cloneKey.value,'');assert.equal(echo.textContent,'Value: [redacted]');
+    assert.equal(options.ignoreElements(settings),false);
+    return{width:1000,height:800,toDataURL:()=> 'data:image/jpeg;base64,/9j/2Q=='};
+  };
+  assert.ok((await f.call('naia_get_screen')).result.image);
 });

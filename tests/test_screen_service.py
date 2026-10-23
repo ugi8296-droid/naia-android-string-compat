@@ -132,15 +132,19 @@ class ScreenServiceTests(unittest.IsolatedAsyncioTestCase):
             await task
         self.assertEqual(self.service.poll(CLIENT)["commands"], [])
 
-    async def test_actions_need_control_and_input_also_needs_edit(self):
+    async def test_ui_input_needs_control_but_not_direct_api_edit_permission(self):
         self.service.poll(CLIENT)
         args = {"snapshot_id": "screen_x", "action": "click", "target": "t1"}
         self.permissions["control"] = False
         with self.assertRaisesRegex(mod.ScreenError, "permission_denied_control"):
             await self.service.request("naia_ui_action", args, self.guard)
         self.permissions["control"] = True; self.permissions["edit"] = False
-        with self.assertRaisesRegex(mod.ScreenError, "permission_denied_edit"):
-            await self.service.request("naia_ui_action", {**args, "action": "fill", "value": "test"}, self.guard)
+        task, command = await self.claimed()
+        self.service.submit(CLIENT, {"id": command["id"], "result": snapshot(), "is_error": False})
+        screen = await task
+        task, command = await self.claimed("naia_ui_action", {**args, "snapshot_id": screen["snapshot_id"], "action": "fill", "value": "test"})
+        self.service.submit(CLIENT, {"id": command["id"], "result": snapshot(image=tiny_jpeg()), "is_error": False})
+        self.assertIn("image", await task)
 
     async def test_error_codes_only_no_untrusted_error_message(self):
         task, command = await self.claimed()
@@ -181,14 +185,28 @@ class ScreenServiceTests(unittest.IsolatedAsyncioTestCase):
             await self.service.request("naia_ui_action", {"snapshot_id": "screen_abc123", "action": "click", "target": "t1"}, self.guard)
         self.assertEqual(self.service.poll(CLIENT)["commands"], [])
 
-    async def test_capture_validates_jpeg_and_explicit_request(self):
-        task, command = await self.claimed(arguments={"capture": True})
-        self.service.submit(CLIENT, {"id": command["id"], "result": snapshot(image=tiny_jpeg()), "is_error": False})
-        self.assertEqual((await task)["image"]["mimeType"], "image/jpeg")
-        task, command = await self.claimed()
+    async def test_capture_defaults_on_and_explicit_false_remains_metadata_only(self):
+        for arguments in ({}, {"capture": True}):
+            task, command = await self.claimed(arguments=arguments)
+            self.service.submit(CLIENT, {"id": command["id"], "result": snapshot(image=tiny_jpeg()), "is_error": False})
+            self.assertEqual((await task)["image"]["mimeType"], "image/jpeg")
+        task, command = await self.claimed(arguments={"capture": False})
         self.service.submit(CLIENT, {"id": command["id"], "result": snapshot(image=tiny_jpeg()), "is_error": False})
         with self.assertRaisesRegex(mod.ScreenError, "unexpected_screen_image"):
             await task
+
+    async def test_capture_failure_is_reported_without_losing_completed_action(self):
+        task, command = await self.claimed()
+        self.service.submit(CLIENT, {"id": command["id"], "result": snapshot(), "is_error": False})
+        await task
+        task, command = await self.claimed("naia_ui_action", {"snapshot_id": "screen_abc123", "action": "click", "target": "t1"})
+        self.service.submit(CLIENT, {"id": command["id"], "result": snapshot(capture_error="capture_unavailable"), "is_error": False})
+        self.assertEqual((await task)["capture_error"], "capture_unavailable")
+        for value in ("secret /tmp/path", {}, "", "x" * 81):
+            with self.assertRaises(mod.ScreenError):
+                mod.sanitize_result(snapshot(capture_error=value))
+        with self.assertRaises(mod.ScreenError):
+            mod.sanitize_result(snapshot(capture_error="capture_failed", image=tiny_jpeg()))
 
     async def test_invalid_or_oversized_result_settles_with_error(self):
         task, command = await self.claimed()

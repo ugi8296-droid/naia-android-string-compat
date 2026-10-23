@@ -21,7 +21,7 @@ from urllib.error import HTTPError
 from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
-RUNTIME_VERSION = "0.2.4"
+RUNTIME_VERSION = "0.2.5"
 MAX_AGE = 120
 MAX_PROMPT = 16000
 MAX_RESULT_BYTES = 60000
@@ -172,14 +172,12 @@ class DeviceBridge:
         if name == "naia_ui_action":
             if not current["permissions"]["screen"]:
                 raise BridgeError("permission_denied_screen")
-            if config.get("screen_edit_required") and not current["permissions"]["edit"]:
-                raise BridgeError("permission_denied_edit")
         return current
 
-    def _delivery_result(self, config, name, result, error, *, edit_required=False):
+    def _delivery_result(self, config, name, result, error):
         if name in ("naia_get_screen", "naia_ui_action"):
             try:
-                self._require({**config, "screen_edit_required": edit_required}, name)
+                self._require(config, name)
             except BridgeError as exc:
                 return {"error": str(exc), "retry": False}, True
         return result, error
@@ -229,8 +227,7 @@ class DeviceBridge:
                     result, error = self._handle(command, config)
                     command_id = command.get("id") if isinstance(command, dict) else None
                     if isinstance(command_id, str) and re.fullmatch(r"[A-Za-z0-9_-]{1,128}", command_id):
-                        result, error = self._delivery_result(config, command.get("name"), result, error,
-                            edit_required=isinstance(command.get("arguments"), dict) and command["arguments"].get("action") in ("fill", "select"))
+                        result, error = self._delivery_result(config, command.get("name"), result, error)
                         self._post(config, "/api/device/result", {"command_id": command_id, "result": result, "is_error": error})
                         self._ack(command_id, config)
             except BridgeError as error:
@@ -314,8 +311,7 @@ class DeviceBridge:
                 result, error = {"error": "previous_outcome_unknown", "retry": False}, True
             else:
                 result, error = item["result"], item["is_error"]
-            result, error = self._delivery_result(config, item.get("name"), result, error,
-                edit_required=item.get("screen_edit_required", False))
+            result, error = self._delivery_result(config, item.get("name"), result, error)
             try:
                 self._post(config, "/api/device/result", {"command_id": command_id, "result": result, "is_error": error})
             except BridgeError as exc:
@@ -363,8 +359,7 @@ class DeviceBridge:
         try:
             config = config or self._config()
             command_id, name, args, stamp = self._validate(command)
-            config = {**config, "deadline": stamp + MAX_AGE,
-                      "screen_edit_required": name == "naia_ui_action" and args.get("action") in ("fill", "select")}
+            config = {**config, "deadline": stamp + MAX_AGE}
             self._require(config, name)
             fingerprint = hashlib.sha256(_json([name, args, stamp]).encode()).hexdigest()
             with self._lock:
@@ -386,8 +381,7 @@ class DeviceBridge:
                     if len(self._journal) >= MAX_JOURNAL:
                         raise BridgeError("command_capacity_reached")
                 self._journal[command_id] = {"pairing": config["pairing"], "fingerprint": fingerprint,
-                    "state": "started", "created_at": stamp, "name": name, "acked": False,
-                    "screen_edit_required": config["screen_edit_required"]}
+                    "state": "started", "created_at": stamp, "name": name, "acked": False}
                 self._write_journal()
                 marked = True
             result = self._on_loop(config, name, args)

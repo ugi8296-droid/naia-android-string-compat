@@ -135,6 +135,11 @@ def sanitize_result(result):
     agent_version = result.get("agent_version")
     if isinstance(agent_version, str) and re.fullmatch(r"[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}", agent_version):
         output["agent_version"] = agent_version
+    if "capture_error" in result:
+        code = result["capture_error"]
+        if not isinstance(code, str) or not _CODE.fullmatch(code) or "image" in result:
+            raise ScreenError("invalid_screen_result")
+        output["capture_error"] = code
     controls = result.get("controls")
     if not isinstance(controls, list) or len(controls) > MAX_CONTROLS:
         raise ScreenError("invalid_screen_result")
@@ -250,8 +255,6 @@ class ScreenService:
         if pending.name == "naia_ui_action":
             if permissions.get("control") is not True:
                 raise ScreenError("permission_denied_control")
-            if pending.arguments.get("action") in ("fill", "select") and permissions.get("edit") is not True:
-                raise ScreenError("permission_denied_edit")
         return {key: permissions.get(key) is True for key in ("screen", "control", "edit", "generate")}
 
     def _finish_locked(self, pending, *, result=None, error=None):
@@ -363,9 +366,7 @@ class ScreenService:
                     code = error.get("code") if isinstance(error, dict) else error
                     raise ScreenError(code)
                 result = sanitize_result(payload["result"])
-                if pending.name == "naia_ui_action" and "image" in result:
-                    raise ScreenError("unexpected_screen_image")
-                if pending.name == "naia_get_screen" and pending.arguments.get("capture") is not True and "image" in result:
+                if pending.name == "naia_get_screen" and pending.arguments.get("capture") is False and "image" in result:
                     raise ScreenError("unexpected_screen_image")
             except ScreenError as error:
                 self._finish_locked(pending, error=error)

@@ -165,12 +165,11 @@ class ScreenIntegrationTests(unittest.TestCase):
                 self.assertTrue(failed)
                 self.assertEqual(result["error"], "permission_denied_" + denied)
 
-    def test_control_requires_screen_and_fill_requires_edit(self):
+    def test_control_allows_ui_fill_without_direct_api_edit_but_requires_screen(self):
         self.controller.update_settings({"allow_control": True})
-        args = {"snapshot_id": "screen_prior", "action": "fill", "target": "t1", "value": "new"}
-        result, failed = self.bridge._handle(self.command("naia_ui_action", args))
-        self.assertTrue(failed)
-        self.assertEqual(result["error"], "permission_denied_edit")
+        _, screen = self.completed()
+        args = {"snapshot_id": screen["snapshot_id"], "action": "fill", "target": "t1", "value": "new"}
+        self.completed("naia_ui_action", args)
         self.controller.update_settings({"allow_screen": False, "allow_edit": True})
         result, failed = self.bridge._handle(self.command("naia_ui_action", {**args, "action": "click", "value": None}))
         self.assertTrue(failed)
@@ -190,15 +189,15 @@ class ScreenIntegrationTests(unittest.TestCase):
         self.assertEqual(result["error"], "pairing_changed")
         self.assertNotIn("SCREEN_PRIVATE", json.dumps(result))
 
-    def test_edit_revoked_after_fill_handoff_discards_result(self):
+    def test_control_revoked_after_fill_handoff_discards_result(self):
         self.controller.update_settings({"allow_control": True, "allow_edit": True})
         _, screen = self.completed()
         future, local = self.begin(self.command("naia_ui_action",
             {"snapshot_id": screen["snapshot_id"], "action": "fill", "target": "t1", "value": "changed"}))
-        self.controller.update_settings({"allow_edit": False})
+        self.controller.update_settings({"allow_control": False})
         result, failed = self.finish(future, local)
         self.assertTrue(failed)
-        self.assertEqual(result["error"], "permission_denied_edit")
+        self.assertEqual(result["error"], "permission_denied_control")
 
     def test_ack_prunes_snapshot_but_keeps_durable_replay_marker(self):
         command, response = self.completed()
