@@ -1,3 +1,15 @@
+# 0.2.2 navigation patch — 2026-10-23
+
+Scope: target-scoped DOM invalidation for UI actions; Android full/simple view switches, standard tab/disclosure navigation, and three existing viewer/menu handlers. Settings/auth, generation, file operations and edit permission guards remain in place.
+
+Passed: 17 JavaScript policy/transport regression tests, 8 loader tests, 11 screen integration tests, 25 repair/downloader tests. Background mutations no longer expire an unchanged Quick button; target/ancestor changes, covered controls, changed handlers, trusted user input and protected screens still reject actions. Live tablet behavior after installing 0.2.2 remains unverified.
+
+Payload SHA-256: `68b384f424717f899565bbd132fa86a1b3d9c64d1edc47604d22a7f53ebedd00`.
+
+The historical 0.2.1 verification below applies to that release, not a rerun of every test for 0.2.2.
+
+---
+
 # 0.2.1 repair verification — 2026-10-23
 
 This release repairs extension initialization and reload failures. It does not replace the APK or change generation pricing, credentials, or permission choices.
