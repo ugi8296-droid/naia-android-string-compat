@@ -1,237 +1,309 @@
-"""NAIA v2.0.48 Android tools. Credentials stay in private app storage."""
+"""One explicit, bounded migration of Android Tools 0.1.0 to 0.2.0.
+
+The normal upstream installer rejects an existing extension ID. This helper
+does not import the replacement, grant it trust, or modify any pairing files.
+"""
 from __future__ import annotations
-import atexit
-import importlib
-import importlib.util
+
+import hashlib
 import json
 import os
-from pathlib import Path
-import re
-import subprocess
+from pathlib import Path, PurePosixPath
+import shutil
+import stat
 import sys
 import threading
-import types
+import zipfile
 
-RELAY_URL = "https://naia-tablet-link.ugi8296.chatgpt.site"
-DEFAULTS = {"low_memory": True, "cache_mb": 32, "plugin_enabled": False,
-            "allow_read": True, "allow_screen": False, "allow_control": False,
-            "allow_edit": False, "allow_generate": False}
-_PACKAGE = "_naia_android_tools_v1"
-_controller = None
+TARGET_ID = "naia_zz_android_tools_v1"
+UPDATER_ID = "naia_android_tools_update_020"
+FROM_VERSION = "0.1.0"
+TO_VERSION = "0.2.0"
+ARCHIVE_NAME = "android-tools-0.2.0.zip"
+PAYLOAD_SHA256 = "1aafc52b2a122ce41c5aff07d19f019b7a01d8ac7f025f56be0b0f7017e957c3"  # build_payload.py pins the reviewed archive in source.
+FILES = frozenset({
+    "extension.json", "main.py", "naia_artist_memory.py", "naia_device_bridge.py",
+    "naia_folder_open.py", "naia_tools_ui.py", "android_tools_panel.html",
+    "naia_screen_service.py", "naia_screen_agent.js", "README.md", "NOTICE.txt", "LICENSE",
+    "vendor/html2canvas-1.4.1.min.js", "vendor/html2canvas-LICENSE.txt",
+})
+MAX_ARCHIVE = 4 * 1024 * 1024
+MAX_CONTENT = 8 * 1024 * 1024
+MAX_SETTINGS = 65536
+_operation = threading.Lock()
 
-def _module(name):
-    directory = Path(__file__).resolve().parent
-    package = sys.modules.get(_PACKAGE)
-    if package is None:
-        package = types.ModuleType(_PACKAGE)
-        package.__path__ = [str(directory)]
-        package.__package__ = _PACKAGE
-        package.__spec__ = importlib.util.spec_from_loader(_PACKAGE, loader=None, is_package=True)
-        sys.modules[_PACKAGE] = package
-    elif Path(package.__path__[0]).resolve() != directory:
-        raise RuntimeError("Android 도구의 이전 실행부가 남아 있습니다. 앱을 다시 시작하세요.")
-    return importlib.import_module(f"{_PACKAGE}.{name}")
 
-def _private_directory(ctx):
-    config = getattr(getattr(ctx._app_context, "runtime_paths", None), "config_dir", None)
-    if config is None:
-        raise RuntimeError("앱 전용 설정 폴더를 확인할 수 없습니다.")
-    directory = (Path(config) / "android-tools").resolve()
-    if hasattr(sys, "getandroidapilevel") and not re.match(
-        r"^/data/(?:user(?:_de)?/\d+|data)/[^/]+/(?:files|no_backup)/", str(directory)):
-        raise RuntimeError("연결 정보를 저장할 Android 앱 전용 폴더가 필요합니다.")
-    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
-    directory.chmod(0o700)
-    return directory
+class UpdateError(Exception):
+    pass
 
-def _pairing(data):
-    if not isinstance(data, dict) or not isinstance(data.get("relay_url"), str) or data["relay_url"].rstrip("/") != RELAY_URL:
-        raise ValueError("NAIA 연결 페이지에서 받은 연결 파일을 선택하세요.")
-    result = {"relay_url": RELAY_URL}
-    for key in ("relay_access_token", "device_id", "device_token"):
-        value = data.get(key)
-        if not isinstance(value, str) or not value.strip() or len(value) > 8192 or any(c in value for c in "\r\n\0"):
-            raise ValueError("연결 파일 형식이 올바르지 않습니다.")
-        result[key] = value.strip()
-    if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", result["device_id"]):
-        raise ValueError("연결 파일의 기기 정보가 올바르지 않습니다.")
+
+def _safe_path(path):
+    """Reject every existing symlink component, including a linked parent."""
+    path = Path(os.path.abspath(path))
+    for part in (path, *path.parents):
+        if part.is_symlink():
+            raise UpdateError("심볼릭 링크가 있는 경로는 업데이트하지 않습니다.")
+    return path
+
+
+def _read_json(path, limit):
+    path = _safe_path(path)
+    if not path.is_file() or path.stat().st_size > limit:
+        raise UpdateError("필요한 설정 파일을 안전하게 읽을 수 없습니다.")
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (ValueError, UnicodeError, OSError):
+        raise UpdateError("설정 파일 형식이 올바르지 않습니다.") from None
+    if not isinstance(value, dict):
+        raise UpdateError("설정 파일 형식이 올바르지 않습니다.")
+    return value
+
+
+def _write_bytes(path, content):
+    path = _safe_path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("wb") as stream:
+        stream.write(content)
+        stream.flush()
+        os.fsync(stream.fileno())
+    path.chmod(0o600)
+
+
+def _atomic_json(path, value):
+    temporary = _safe_path(path.with_name(path.name + ".android-tools-update.tmp"))
+    _write_bytes(temporary, json.dumps(value, ensure_ascii=False, indent=2,
+                                       allow_nan=False).encode("utf-8"))
+    os.replace(temporary, path)
+
+
+def _identity(meta, version):
+    return (meta.get("id") == TARGET_ID and meta.get("version") == version
+            and meta.get("entry") == "main.py" and meta.get("naia_ext_api") == 1)
+
+
+def _payload(directory):
+    meta = _read_json(directory / "payload-manifest.json", MAX_SETTINGS)
+    archive = _safe_path(directory / ARCHIVE_NAME)
+    if (meta.get("id") != TARGET_ID or meta.get("from_version") != FROM_VERSION
+            or meta.get("to_version") != TO_VERSION or meta.get("archive") != ARCHIVE_NAME
+            or not isinstance(meta.get("files"), dict) or set(meta["files"]) != FILES):
+        raise UpdateError("업데이트 대상 또는 파일 목록이 일치하지 않습니다.")
+    if not archive.is_file() or archive.stat().st_size > MAX_ARCHIVE:
+        raise UpdateError("업데이트 묶음의 크기가 올바르지 않습니다.")
+    if (meta.get("sha256") != PAYLOAD_SHA256
+            or hashlib.sha256(archive.read_bytes()).hexdigest() != PAYLOAD_SHA256):
+        raise UpdateError("업데이트 묶음의 해시가 일치하지 않습니다.")
+    result = {}
+    with zipfile.ZipFile(archive) as zipped:
+        entries = zipped.infolist()
+        if len(entries) != len(FILES) or {i.filename for i in entries} != FILES:
+            raise UpdateError("업데이트 묶음에 예상하지 않은 파일이 있습니다.")
+        if sum(i.file_size for i in entries) > MAX_CONTENT:
+            raise UpdateError("업데이트 묶음이 너무 큽니다.")
+        for item in entries:
+            path = PurePosixPath(item.filename)
+            file_type = stat.S_IFMT(item.external_attr >> 16)
+            if (path.is_absolute() or ".." in path.parts or "\\" in item.filename
+                    or file_type not in (0, stat.S_IFREG) or item.is_dir()):
+                raise UpdateError("안전하지 않은 업데이트 파일입니다.")
+            content = zipped.read(item)
+            if hashlib.sha256(content).hexdigest() != meta["files"][item.filename]:
+                raise UpdateError("업데이트 파일의 해시가 일치하지 않습니다.")
+            result[item.filename] = content
+    try:
+        identity = json.loads(result["extension.json"])
+    except (ValueError, UnicodeError):
+        identity = {}
+    if not _identity(identity, TO_VERSION):
+        raise UpdateError("대체할 확장의 ID 또는 버전이 올바르지 않습니다.")
     return result
 
-class Controller:
-    def __init__(self, ctx, state_root, folder_module):
-        self.ctx, self.state_root, self.folder_module = ctx, Path(state_root), folder_module
-        self.pair_path = self.state_root / "pairing.json"
-        self._lock, self._closed, self._cleanup = threading.RLock(), False, []
-        self.memory, self.bridge, self.screen, self._pair = None, None, None, None
-        try:
-            if self.pair_path.stat().st_size <= 32768:
-                self._pair = _pairing(json.loads(self.pair_path.read_text(encoding="utf-8")))
-        except (OSError, ValueError, TypeError):
-            pass
 
-    def available(self):
-        r = self.ctx._record
-        return bool(not self._closed and r.status == "loaded" and r.enabled and not r.blocked)
+def _settings(target):
+    path = _safe_path(target / "settings.json")
+    settings = _read_json(path, MAX_SETTINGS) if path.exists() else {}
+    # A version change must not silently expand the user's previous consent.
+    return {**settings, "allow_screen": False, "allow_control": False}
 
-    def active(self):
-        return bool(self.available() and self.ctx._record.armed)
 
-    def require_available(self):
-        if not self.available():
-            raise ValueError("Settings → Extension에서 Android 도구를 활성화하세요.")
+def _check_tree(directory):
+    total = 0
+    for parent, dirs, files in os.walk(directory, followlinks=False):
+        for name in [*dirs, *files]:
+            item = _safe_path(Path(parent) / name)
+            if not item.is_dir() and not item.is_file():
+                raise UpdateError("이전 확장에 지원하지 않는 파일이 있습니다.")
+            if item.is_file():
+                total += item.stat().st_size
+                if total > MAX_CONTENT:
+                    raise UpdateError("이전 확장이 예상한 크기를 초과해 업데이트를 중단했습니다.")
 
-    def settings(self):
-        raw = self.ctx.load_settings(dict(DEFAULTS))
-        result = {k: raw.get(k, v) is True for k, v in DEFAULTS.items() if k != "cache_mb"}
-        result["cache_mb"] = raw.get("cache_mb") if type(raw.get("cache_mb")) is int and raw["cache_mb"] in (16, 32, 64) else 32
-        return result
 
-    def memory_settings(self):
-        settings = self.settings()
-        return {"low_memory": settings["low_memory"] and self.active(), "cache_mb": settings["cache_mb"]}
+def _require_active(ctx):
+    record = ctx._record
+    if not (record.status == "loaded" and record.approved and record.enabled
+            and not record.blocked and record.armed):
+        raise UpdateError("업데이트 도구를 신뢰하고 활성화한 뒤 다시 눌러 주세요.")
 
-    def bridge_settings(self):
-        with self._lock:
-            settings = self.settings()
-            return {**(self._pair or {}), "enabled": settings["plugin_enabled"] and bool(self._pair) and self.active(),
-                    "permissions": {k: settings["allow_" + k] for k in ("read", "screen", "control", "edit", "generate")}}
 
-    def status(self):
-        memory = self.memory.refresh() if self.memory else {}
-        with self._lock:
-            result = {"settings": self.settings(), "memory": memory,
-                "paired": bool(self._pair), "extension_active": self.available(),
-                "armed": bool(self.ctx._record.armed), "relay_url": RELAY_URL}
-        # Broker permission guards acquire this controller's lock. Do not hold
-        # it while entering the broker (or simultaneous status/poll deadlocks).
-        result["bridge"] = self.bridge.status() if self.bridge else {"state": "stopped"}
-        result["screen"] = self.screen.status() if self.screen else {"ready": False}
-        return result
+def _same_payload(target, payload):
+    return all(_safe_path(target / name).is_file()
+               and (target / name).stat().st_size == len(content)
+               and (target / name).read_bytes() == content
+               for name, content in payload.items())
 
-    def _save(self, settings):
-        if not self.ctx.save_settings(settings):
-            raise ValueError("설정을 저장하지 못했습니다. 다시 시도하세요.")
 
-    def update_settings(self, changes):
-        self.require_available()
-        if not isinstance(changes, dict) or not changes or set(changes) - DEFAULTS.keys():
-            raise ValueError("설정 형식이 올바르지 않습니다.")
-        for key, value in changes.items():
-            if key == "cache_mb":
-                if type(value) is not int or value not in (16, 32, 64):
-                    raise ValueError("캐시 크기는 16, 32, 64MB 중 선택하세요.")
-            elif type(value) is not bool:
-                raise ValueError("설정은 켜기 또는 끄기여야 합니다.")
-        with self._lock:
-            new = {**self.settings(), **changes}
-            if new["plugin_enabled"] and not self._pair:
-                raise ValueError("먼저 연결 파일을 불러오세요.")
-            self._save(new)
-        return self.status()
+def perform_update(ctx):
+    """Never run during import. The user must press the named update action."""
+    _require_active(ctx)
+    if not _operation.acquire(blocking=False):
+        raise UpdateError("이미 업데이트 중입니다.")
+    try:
+        return _perform_update(ctx)
+    finally:
+        _operation.release()
 
-    def import_pairing(self, data):
-        self.require_available()
-        pair = _pairing(data)
-        with self._lock:
-            # Persist revocation first: a failed import never inherits old writes.
-            disabled = {**self.settings(), "plugin_enabled": False, "allow_read": True,
-                        "allow_screen": False, "allow_control": False, "allow_edit": False, "allow_generate": False}
-            self._save(disabled)
-            temporary = self.pair_path.with_suffix(".tmp")
-            fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+
+def _perform_update(ctx):
+    app = ctx._app_context
+    manager = getattr(app, "extension_manager", None)
+    paths = getattr(app, "runtime_paths", None)
+    if manager is None or paths is None or not callable(getattr(manager, "extensions_root", None)):
+        raise UpdateError("지원하는 NAIA 확장 관리자를 찾을 수 없습니다.")
+    root = _safe_path(manager.extensions_root())
+    directory = _safe_path(ctx.ext_dir)
+    if directory != root / UPDATER_ID or not root.is_dir():
+        raise UpdateError("업데이트 도구의 설치 위치가 올바르지 않습니다.")
+    target = _safe_path(root / TARGET_ID)
+    config = _safe_path(paths.config_dir / "extensions.json")
+    backup_root = _safe_path(paths.config_dir / "android-tools" / "update-0.2.0")
+    if backup_root.is_relative_to(root) or root.is_relative_to(backup_root):
+        raise UpdateError("안전한 백업 폴더를 만들 수 없습니다.")
+    transaction = _safe_path(root / ".android-tools-update-0.2.0")
+    previous = _safe_path(transaction / "previous")
+    stage = _safe_path(transaction / "new")
+    payload = _payload(directory)
+
+    # Recover the only possible interrupted rename gap before normal validation.
+    if not target.exists() and previous.is_dir():
+        if not _identity(_read_json(previous / "extension.json", MAX_SETTINGS), FROM_VERSION):
+            raise UpdateError("중단된 업데이트 백업의 ID가 일치하지 않습니다.")
+        _check_tree(previous)
+        os.replace(previous, target)
+    if not target.is_dir():
+        raise UpdateError("기존 Android 도구 0.1.0이 설치되어 있지 않습니다.")
+    current_meta = _read_json(target / "extension.json", MAX_SETTINGS)
+    if _identity(current_meta, TO_VERSION):
+        if not _same_payload(target, payload):
+            raise UpdateError("설치된 0.2.0의 파일이 달라 덮어쓰지 않았습니다.")
+        return {"updated": False, "already_updated": True, "restart_required": True}
+    if not _identity(current_meta, FROM_VERSION):
+        raise UpdateError("이 도구는 Android 도구 0.1.0에서 0.2.0으로만 업데이트합니다.")
+    if bool(getattr(app, "is_generating", False) or getattr(app, "headless_generation_runner_active", False)):
+        raise UpdateError("이미지 생성이 끝난 뒤 업데이트해 주세요.")
+    _check_tree(target)
+    initial_config = _read_json(config, MAX_SETTINGS)
+    if not isinstance(initial_config.get("approved"), list):
+        raise UpdateError("기존 확장 승인 정보를 확인할 수 없습니다.")
+    old_record = next((r for r in manager.records if r.ext_id == TARGET_ID), None)
+    if old_record is None or _safe_path(old_record.directory) != target:
+        raise UpdateError("기존 확장의 실행 정보가 설치 위치와 다릅니다.")
+    old_module = sys.modules.get("naia_ext_" + TARGET_ID)
+    old_controller = getattr(old_module, "_controller", None)
+    if old_record.status == "loaded" and not callable(getattr(old_controller, "close", None)):
+        raise UpdateError("기존 도구를 안전하게 중지할 수 없습니다. 앱 재시작 후 다시 시도하세요.")
+    if old_controller is not None and _safe_path(old_controller.ctx.ext_dir) != target:
+        raise UpdateError("다른 위치의 도구가 실행 중이어서 중단했습니다.")
+    if transaction.exists():
+        _check_tree(transaction)
+        if previous.exists():
+            raise UpdateError("이전 업데이트 복구 파일이 남아 있습니다. 수동 확인이 필요합니다.")
+        shutil.rmtree(transaction)
+    stage.mkdir(parents=True)
+    for name, content in payload.items():
+        _write_bytes(stage / name, content)
+    _atomic_json(stage / "settings.json", _settings(target))
+
+    backup_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    backup_root.chmod(0o700)
+    backup = _safe_path(backup_root / "previous-extension")
+    if backup.exists():
+        _check_tree(backup)
+        # Keep the first complete backup. Interrupted backup copies are rejected.
+        complete = _read_json(backup_root / "backup-complete.json", MAX_SETTINGS)
+        if complete != {"id": TARGET_ID, "version": FROM_VERSION}:
+            raise UpdateError("완료되지 않은 백업이 있어 덮어쓰지 않았습니다.")
+    else:
+        shutil.copytree(target, backup, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+        _atomic_json(backup_root / "extensions-before.json", initial_config)
+        _atomic_json(backup_root / "backup-complete.json", {"id": TARGET_ID, "version": FROM_VERSION})
+
+    revoked = False
+    swapped_old = False
+    installed_new = False
+    try:
+        with manager._lock:
+            _require_active(ctx)
+            latest = _read_json(config, MAX_SETTINGS)
+            if not isinstance(latest.get("approved"), list):
+                raise UpdateError("확장 승인 정보가 바뀌어 업데이트를 중단했습니다.")
+            latest["approved"] = [v for v in latest["approved"] if v != TARGET_ID]
+            latest["inactive"] = [v for v in latest.get("inactive", []) if v != TARGET_ID]
+            latest["disarmed"] = [v for v in latest.get("disarmed", []) if v != TARGET_ID]
+            old_flags = (old_record.approved, old_record.enabled, old_record.armed)
+            old_record.approved = False
+            old_record.enabled = False
+            old_record.armed = False
+            # Keep its loaded status until restart: never hot-load replacement code.
             try:
-                with os.fdopen(fd, "w", encoding="utf-8") as file:
-                    json.dump(pair, file, ensure_ascii=False)
-                    file.flush()
-                    os.fsync(file.fileno())
-                temporary.chmod(0o600)
-                os.replace(temporary, self.pair_path)
-            finally:
-                temporary.unlink(missing_ok=True)
-            self._pair = pair
-            self._save({**disabled, "plugin_enabled": True})
-        return self.status()
-
-    def disconnect(self):
-        self.require_available()
-        with self._lock:
-            self._save({**self.settings(), "plugin_enabled": False, "allow_screen": False,
-                        "allow_control": False, "allow_edit": False, "allow_generate": False})
-            self._pair = None
-            self.pair_path.unlink(missing_ok=True)
-        return self.status()
-
-    def open_folder(self, target):
-        self.require_available()
-        if not self.active():
-            return {"opened": False, "reason": "extension_inactive"}
-        app = self.ctx._app_context
-        if target == "save":
-            path = app._save_service().current_save_directory()
-        elif target == "artist":
-            from app.backend.server.artist_thumbnail_routes import artist_thumbnail_service
-            path = artist_thumbnail_service(app).mode_data_root
-        else:
-            raise ValueError("열 수 있는 폴더가 아닙니다.")
-        return self.folder_module.open_native_folder(path)
-
-    def open_relay(self):
-        self.require_available()
-        opened = False
-        if sys.platform == "android" or hasattr(sys, "getandroidapilevel"):
+                _atomic_json(config, latest)
+            except BaseException:
+                old_record.approved, old_record.enabled, old_record.armed = old_flags
+                raise
+            revoked = True
+        if old_controller is not None:
+            old_controller.close()
+        # Re-read after stopping the writer, so the last saved settings survive.
+        _atomic_json(stage / "settings.json", _settings(target))
+        os.replace(target, previous)
+        swapped_old = True
+        os.replace(stage, target)
+        installed_new = True
+        _atomic_json(backup_root / "completed.json", {"id": TARGET_ID, "version": TO_VERSION,
+                                                    "requires_restart_and_approval": True})
+    except BaseException as error:
+        if swapped_old:
             try:
-                r = subprocess.run(["/system/bin/am", "start", "-a", "android.intent.action.VIEW",
-                    "-c", "android.intent.category.BROWSABLE", "-d", RELAY_URL],
-                    stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                    timeout=10, check=False)
-                opened = r.returncode == 0
-            except (OSError, subprocess.SubprocessError):
-                pass
-        return {"opened": opened, "url": RELAY_URL}
+                if installed_new and target.exists():
+                    os.replace(target, transaction / "failed-new")
+                os.replace(previous, target)
+            except OSError:
+                raise UpdateError("업데이트 복원이 완료되지 않았습니다. 앱을 재시작하지 말고 진단을 요청해 주세요.") from None
+        if revoked:
+            raise UpdateError("업데이트에 실패해 이전 파일을 유지했습니다. 앱 재시작 후 기존 도구를 다시 승인해 주세요.") from error
+        raise
+    # The separate backup remains. The helper itself is deliberately retained.
+    shutil.rmtree(transaction, ignore_errors=True)
+    return {"updated": True, "already_updated": False, "restart_required": True,
+            "reapproval_required": True, "version": TO_VERSION}
 
-    def close(self):
-        with self._lock:
-            if self._closed:
-                return
-            self._closed = True
-        if self.bridge:
-            self.bridge.close()
-        if self.screen:
-            self.screen.close()
-        for cleanup in reversed(self._cleanup):
-            try:
-                cleanup()
-            except Exception:
-                pass
-        if self.memory:
-            self.memory.close()
 
 def register(ctx):
-    global _controller
-    if _controller:
-        _controller.close()
-        _controller = None
-    folder, memory, bridge, ui, screen = [_module(n) for n in
-        ("naia_folder_open", "naia_artist_memory", "naia_device_bridge", "naia_tools_ui", "naia_screen_service")]
-    controller = Controller(ctx, _private_directory(ctx), folder)
-    try:
-        controller.memory = memory.install(controller.memory_settings, state_root=controller.state_root)
-        existing = getattr(ctx._app_context, "artist_thumbnail_service", None)
-        if existing is not None:
-            controller.memory.attach(existing)
-        controller.screen = screen.ScreenService()
-        controller.bridge = bridge.DeviceBridge(ctx, controller.bridge_settings,
-            state_root=controller.state_root, allowed_origins={RELAY_URL}, screen_service=controller.screen)
-        handle = ui.install_ui(controller, folder, memory)
-        controller._cleanup.append(handle if callable(handle) else handle.close)
-        ctx.register_panel([{"key": "help", "type": "action", "label": "Android 도구 설정 안내",
-            "help": "Settings → Global → Android 도구 · 플러그인에서 설정합니다."}],
-            title="Android 도구 0.2.0", on_action=lambda key: ctx.show_toast(
-                "화면 새로고침 후 Settings → Global → Android 도구 · 플러그인을 여세요.") if key == "help" else None)
-        controller.bridge.start()
-    except BaseException:
-        controller.close()
-        raise
-    _controller = controller
-    atexit.register(controller.close)
-    ctx.log("Android 도구가 준비되었습니다. 화면을 새로고침하세요. 플러그인 연결은 설정에서 시작합니다.")
+    def action(key):
+        if key != "apply_update":
+            return
+        try:
+            result = perform_update(ctx)
+            message = ("이미 Android 도구 0.2.0이 설치되어 있습니다." if result["already_updated"]
+                       else "Android 도구 0.2.0 파일을 적용했습니다. 연결 정보와 기존 설정은 유지했습니다.")
+            message += " NAIA를 강제 종료하고 다시 연 뒤 Settings → Extension에서 Android 도구를 다시 신뢰하고 활성화하세요."
+            ctx.log(message)
+            ctx.show_toast(message, level="success")
+        except Exception as error:
+            message = str(error) if isinstance(error, UpdateError) else "업데이트를 완료하지 못했습니다. 기존 파일과 백업을 확인해야 합니다."
+            ctx.log(message)
+            ctx.show_toast(message, level="error")
+    ctx.register_panel([{"key": "apply_update", "type": "action", "scope": "global",
+                         "label": "Android 도구 0.2.0 적용",
+                         "help": "기존 0.1.0을 중지하고 파일만 교체합니다. 앱 재시작과 도구 재승인이 필요합니다. 화면 권한은 자동으로 켜지지 않습니다."}],
+                       title="Android 도구 0.2.0 업데이트", on_action=action)
