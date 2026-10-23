@@ -58,7 +58,7 @@ class ScreenServiceTests(unittest.IsolatedAsyncioTestCase):
     async def test_cross_thread_result_returns_sanitized_snapshot(self):
         task, command = await self.claimed()
         self.assertEqual(command["permissions"]["generate"], False)
-        payload = snapshot(internal_secret="never_forward")
+        payload = snapshot(internal_secret="never_forward", agent_version="0.2.3")
         payload["controls"][0]["private_url"] = "must_not_forward"
         result = []
         thread = threading.Thread(target=lambda: result.append(self.service.submit(CLIENT,
@@ -67,6 +67,7 @@ class ScreenServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result, [{"accepted": True}])
         response = await task
         self.assertEqual(response["snapshot_id"], "screen_abc123")
+        self.assertEqual(response["agent_version"], "0.2.3")
         self.assertNotIn("internal_secret", response)
         self.assertNotIn("private_url", response["controls"][0])
         self.assertGreaterEqual(self.guard_calls, 4)

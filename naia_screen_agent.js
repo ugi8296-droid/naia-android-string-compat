@@ -86,10 +86,10 @@
     const identifiers = [id, handler, attr(el, 'data-studio-action'), attr(el, 'data-action'), attr(el, 'data-artist-batch-mode')].join(' ');
     // Presentation-only controls may be added by the Android shell. Never
     // infer arbitrary button safety from the absence of a blocked word.
-    if (!BLOCK_NAMES.test(identifiers) && !el.closest('form') && el.tagName === 'BUTTON') {
+    if (!BLOCK_NAMES.test(identifiers) && !el.closest('form') && el.matches('button,[role="button"],[onclick]')) {
       const text = norm(el.textContent, 100).replace(/[▾▴▼▲⛶]/g, '').trim();
       const viewLabels = /^(?:간편 화면|전체 화면|전체화면|전체 화면으로 전환|간편 화면으로 전환|크게 보기|접기|펼치기|Full screen|Fullscreen|Simple view)$/i;
-      if (viewLabels.test(text)) return {actions: ['click'], edit: false};
+      if (viewLabels.test(text) || /^(?:간편 화면 사용 중\. 전체 기능을 보려면 전체 화면으로 전환|전체 화면 사용 중\. 간편 화면으로 전환)$/.test(attr(el, 'title'))) return {actions: ['click'], edit: false};
       // Standard tab/disclosure navigation must identify its local destination.
       const destination = attr(el, 'aria-controls');
       const panel = destination && global.document.getElementById?.(destination);
@@ -296,7 +296,7 @@
         if (part) text += (text ? '\n' : '') + part;
       }
       const random = global.crypto.randomUUID ? global.crypto.randomUUID() : Array.from(global.crypto.getRandomValues(new Uint32Array(4)), n => n.toString(36)).join('_');
-      const result = {snapshot_id: 'screen_' + random, title: 'NAIA', viewport: {width: global.innerWidth, height: global.innerHeight, scroll_x: global.scrollX, scroll_y: global.scrollY}, controls, text: text.slice(0, 12000), blocked: false};
+      const result = {agent_version: '0.2.3', snapshot_id: 'screen_' + random, title: 'NAIA', viewport: {width: global.innerWidth, height: global.innerHeight, scroll_x: global.scrollX, scroll_y: global.scrollY}, controls, text: text.slice(0, 12000), blocked: false};
       // Option dictionaries can be unusually large. Truncate options before
       // dropping controls, preserving all actionable target mappings.
       while (new TextEncoder().encode(JSON.stringify(result)).length > 260000) {

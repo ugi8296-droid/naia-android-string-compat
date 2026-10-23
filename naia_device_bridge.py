@@ -21,6 +21,7 @@ from urllib.error import HTTPError
 from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
+RUNTIME_VERSION = "0.2.3"
 MAX_AGE = 120
 MAX_PROMPT = 16000
 MAX_RESULT_BYTES = 60000
@@ -438,7 +439,9 @@ class DeviceBridge:
             return {"prompt": str(getattr(self.app, "prompt_text", ""))[:MAX_PROMPT],
                     "negative_prompt": str(getattr(self.app, "negative_prompt_text", ""))[:MAX_PROMPT],
                     "api_mode": str(self.app.get_api_mode())[:40], "parameters": selected,
-                    "generation": self._generation_status(config)}
+                    "generation": self._generation_status(config),
+                    "diagnostics": {"runtime_version": RUNTIME_VERSION,
+                        "screen": self.screen_service.status() if self.screen_service else {"ready": False}}}
         if name == "naia_get_generation_status":
             return self._generation_status(config)
         if name == "naia_set_prompt":

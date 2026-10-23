@@ -132,6 +132,9 @@ def sanitize_result(result):
         "text": _text(result.get("text", ""), 12000),
         "blocked": False,
     }
+    agent_version = result.get("agent_version")
+    if isinstance(agent_version, str) and re.fullmatch(r"[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}", agent_version):
+        output["agent_version"] = agent_version
     controls = result.get("controls")
     if not isinstance(controls, list) or len(controls) > MAX_CONTROLS:
         raise ScreenError("invalid_screen_result")

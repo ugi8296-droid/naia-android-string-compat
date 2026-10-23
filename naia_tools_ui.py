@@ -167,8 +167,12 @@ panelURL.hash += '&parent='+encodeURIComponent(location.origin);
 const dialog=document.createElement('dialog');dialog.setAttribute('aria-label','Android 도구 · 플러그인');
 dialog.style.cssText='padding:0;border:1px solid #475569;border-radius:16px;width:min(580px,96vw);max-height:94vh;background:#111827;color:#eee;z-index:2147483647';
 const close=document.createElement('button');close.textContent='닫기 ×';close.style.cssText='display:block;margin:8px 12px 8px auto;min-height:44px;padding:8px 16px;background:#243244;color:#fff;border:0;border-radius:8px';close.onclick=()=>dialog.close();
-const frame=document.createElement('iframe');frame.title='Android 도구 · 플러그인';frame.referrerPolicy='no-referrer';frame.style.cssText='width:100%;height:min(740px,78vh);border:0;display:block';frame.src=panelURL.href;
-dialog.append(close,frame);document.body.append(dialog);
+// The command transport must not live inside a closed dialog. Keep it
+// mounted for the whole page lifetime; settings use an independent iframe.
+const transportURL=new URL(panelURL);transportURL.hash+='&mode=transport';
+const frame=document.createElement('iframe');frame.title='NAIA 화면 연결';frame.referrerPolicy='no-referrer';frame.setAttribute('aria-hidden','true');frame.tabIndex=-1;frame.style.cssText='position:fixed;bottom:0;left:0;width:1px;height:1px;border:0;opacity:0.01;pointer-events:none';frame.src=transportURL.href;
+const settingsFrame=document.createElement('iframe');settingsFrame.title='Android 도구 · 플러그인';settingsFrame.referrerPolicy='no-referrer';settingsFrame.style.cssText='width:100%;height:min(740px,78vh);border:0;display:block';
+dialog.append(close,settingsFrame);document.body.append(frame,dialog);
 window.__naiaInstallScreenAgent({frame,panelOrigin});
 let serial=0,ready=false,revision;const pending=new Map();
 window.naiaAndroidTools={openFolderNative(target){
@@ -189,7 +193,15 @@ window.addEventListener('message',event=>{
   revision=data.revision;window.dispatchEvent(new CustomEvent('naia-artist-index-ready',{detail:{revision,force:true}}));
  }
 });
-document.addEventListener('click',event=>{if(event.target.closest?.('[data-android-tools-open]')){event.preventDefault();if(!dialog.open)dialog.showModal();}});
+// Foreground page messages wake the transport even if WebView throttles an
+// iframe timer. Repeated handshake also recovers a missed initial ready event.
+function wakeTransport(){frame.contentWindow.postMessage({type:'naia-transport-wake'},panelOrigin);}
+frame.addEventListener('load',wakeTransport);
+const wakeTimer=setInterval(wakeTransport,1000);
+window.addEventListener('pageshow',wakeTransport);
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')wakeTransport();});
+window.addEventListener('pagehide',event=>{if(!event.persisted)clearInterval(wakeTimer);});
+document.addEventListener('click',event=>{if(event.target.closest?.('[data-android-tools-open]')){event.preventDefault();if(!settingsFrame.src)settingsFrame.src=panelURL.href;if(!dialog.open)dialog.showModal();}});
 })();</script>'''.replace("PANEL_URL", json.dumps(panel_url))
 
 

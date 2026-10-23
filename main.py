@@ -336,7 +336,7 @@ def register(ctx):
         controller._cleanup.append(handle if callable(handle) else handle.close)
         ctx.register_panel([{"key": "help", "type": "action", "label": "Android 도구 설정 안내",
             "help": "Settings → Global → Android 도구 · 플러그인에서 설정합니다."}],
-            title="Android 도구 0.2.2", on_action=lambda key: ctx.show_toast(
+            title="Android 도구 0.2.3", on_action=lambda key: ctx.show_toast(
                 "화면 새로고침 후 Settings → Global → Android 도구 · 플러그인을 여세요.") if key == "help" else None)
         controller.bridge.start()
     except BaseException:

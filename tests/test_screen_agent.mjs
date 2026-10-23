@@ -258,3 +258,12 @@ test('new protected screen blocks action even when original button is unchanged'
   const response = await f.call('naia_ui_action', {snapshot_id:screen.snapshot_id, target:screen.controls[0].target, action:'click'});
   assert.equal(response.result.error.code, 'protected_screen');
 });
+
+
+test('branded Android shell view switch uses exact observed title and reports agent version', async () => {
+  const f = fixture(), button = f.add('DIV', {role:'button', label:'NAIA2 간편 화면 ▾', title:'간편 화면 사용 중. 전체 기능을 보려면 전체 화면으로 전환'});
+  const {result: screen} = await f.call('naia_get_screen');
+  assert.equal(screen.agent_version, '0.2.3');
+  const result = await f.call('naia_ui_action', {snapshot_id:screen.snapshot_id,target:screen.controls[0].target,action:'click'});
+  assert.equal(result.is_error, false);assert.equal(button.clicks,1);
+});

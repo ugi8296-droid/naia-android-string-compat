@@ -30,6 +30,7 @@
 <script>
 (()=>{'use strict';
 const fragment=new URLSearchParams(location.hash.slice(1));
+const transport=fragment.get('mode')==='transport';let lastStatusPoll=0;
 const token=fragment.get('token')||'';const parentOrigin=fragment.get('parent')||'';
 history.replaceState(null,'',location.pathname);
 const $=id=>document.getElementById(id);let current={},busy=false,polling=false;
@@ -67,7 +68,7 @@ $('disconnect').onclick=()=>change('/disconnect',{},'이 기기의 연결을 해
 $('openRelay').onclick=async()=>{if(busy)return;busy=true;paint();try{const data=await api('/open-relay',{});notice(data.opened?'브라우저에서 연결 파일을 받은 뒤 가져오세요.':'아래 연결 페이지 링크를 눌러 브라우저에서 여세요.');}catch(error){notice(error.message,true);}finally{busy=false;paint();}};
 $('pairFile').addEventListener('change',async()=>{const file=$('pairFile').files?.[0];if(!file)return;try{if(file.size>32768)throw new Error('연결 파일이 너무 큽니다.');const data=JSON.parse(await file.text());await change('/pair',data,'연결 파일을 불러왔습니다. 처음에는 읽기만 허용합니다.');}catch{notice('올바른 연결 JSON 파일을 선택하세요.',true);}finally{$('pairFile').value='';}});
 async function pollScreen(){
- if(screenPolling||!screenReady||!current.armed||!current.settings?.plugin_enabled||!current.settings?.allow_screen)return;
+ if(!transport||screenPolling||!screenReady||!current.armed||!current.settings?.plugin_enabled||!current.settings?.allow_screen)return;
  screenPolling=true;
  try{const result=await api('/screen/poll',{client_id:clientId});
   for(const command of result.commands||[]){
@@ -81,7 +82,8 @@ async function pollScreen(){
 window.addEventListener('message',async event=>{
  if(!parentAllowed||event.source!==window.parent||event.origin!==parentOrigin)return;
  const data=event.data;if(!data||typeof data!=='object')return;
- if(data.type==='naia-ui-ready'){screenReady=true;pollScreen();return;}
+ if(data.type==='naia-transport-wake'&&transport){notifyParent({type:'naia-android-ready'});if(Date.now()-lastStatusPoll>=3000){lastStatusPoll=Date.now();await poll();}pollScreen();return;}
+ if(data.type==='naia-ui-ready'&&transport){screenReady=true;pollScreen();return;}
  if(data.type==='naia-ui-result'){
   if(!screenPending.delete(data.id)||typeof data.is_error!=='boolean')return;
   try{await api('/screen/result',{client_id:clientId,id:data.id,result:data.result,is_error:data.is_error});}catch{}
@@ -91,6 +93,7 @@ window.addEventListener('message',async event=>{
  let opened=false;try{const result=await api('/folder/open',{target:data.target});opened=result.opened===true;}catch{}
  notifyParent({type:'naia-android-folder-result',id:data.id,opened});
 });
-notifyParent({type:'naia-android-ready'});poll();setInterval(poll,3000);setInterval(pollScreen,1000);
+if(transport){document.body.style.visibility='hidden';notifyParent({type:'naia-android-ready'});}
+poll();setInterval(poll,3000);if(transport)setInterval(pollScreen,1000);
 })();
 </script></body></html>

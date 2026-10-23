@@ -98,6 +98,7 @@ class BridgeTests(unittest.TestCase):
         result, error = self.call()
         self.assertFalse(error); self.assertEqual(result["prompt"], "original")
         self.assertEqual(result["parameters"]["steps"], 28)
+        self.assertEqual(result["diagnostics"]["runtime_version"], "0.2.3")
         self.assertNotIn("SECRET", json.dumps(result)); self.assertNotIn("SECRET", json.dumps(self.bridge.status()))
 
     def test_default_permissions_and_disarming_fail_closed(self):
