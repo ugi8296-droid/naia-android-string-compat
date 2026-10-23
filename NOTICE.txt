@@ -1,4 +1,4 @@
-NAIA Storage Picker 0.1.0
+NAIA Storage Picker 0.1.1
 
 For NAIA 2.0 v2.0.48 by DNT-LAB.
 Upstream: https://github.com/DNT-LAB/NAIA2.0
@@ -11,3 +11,6 @@ No endorsement by DNT-LAB is implied.
 This is an app-accessible filesystem picker, not an Android SAF adapter.
 Only runtime source, license and installation documentation are distributed.
 Credentials, diagnostics and development workspace data are not included.
+
+This repair preserves the extension ID, saved settings and existing auth data.
+Existing installations update through the android-tools-repair branch.

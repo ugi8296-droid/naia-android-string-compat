@@ -7,6 +7,7 @@ from __future__ import annotations
 import hmac
 import importlib
 import json
+import re
 import secrets
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -14,6 +15,8 @@ from pathlib import Path
 
 
 def _replace(source, old, new):
+    if source.count(new) == 1:
+        return source
     if source.count(old) != 1:
         raise RuntimeError("저장 폴더 화면 버전이 달라 확장을 적용하지 않았습니다.")
     return source.replace(old, new, 1)
@@ -64,6 +67,18 @@ def patch_feature(source, panel_url=None):
       return;
     }""")
     if panel_url:
+        # Replace only the exact previous adapter trailer. Never retain a
+        # stopped listener's capability URL when another wrapper is present.
+        start = source.rfind("\n(()=>{\nif(globalThis.__naiaOpenStoragePicker)return;")
+        if start >= 0:
+            trailer = source[start + 1:].strip()
+            match = re.search(r'const url=new URL\(("(?:\\.|[^"\\])*")\), origin=url.origin;', trailer)
+            if not match:
+                raise RuntimeError("이전 폴더 선택 화면 연결을 확인하지 못했습니다.")
+            old_url = json.loads(match.group(1))
+            if trailer != _injection(old_url).removeprefix("<script>").removesuffix("</script>"):
+                raise RuntimeError("이전 폴더 선택 화면 연결이 달라 적용하지 않았습니다.")
+            source = source[:start]
         source += "\n" + _injection(panel_url).removeprefix("<script>").removesuffix("</script>")
     return source
 

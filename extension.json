@@ -1,7 +1,7 @@
 {
   "id": "naia_storage_picker_v1",
   "name": "NAIA 저장 폴더 선택",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "naia_ext_api": 1,
   "entry": "main.py",
   "description": "저장경로를 직접 쓰는 대신 앱이 접근할 수 있는 폴더를 목록에서 선택합니다. 쓰기 확인 후 적용하며 기존 저장 옵션을 유지합니다. 갤럭시 기본 선택창이나 새 Android 권한 부여 기능은 포함하지 않습니다."

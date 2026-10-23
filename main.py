@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import atexit
+import hashlib
 import importlib
 import importlib.util
 from pathlib import Path
@@ -22,8 +23,71 @@ def _module(name):
         package.__spec__ = importlib.util.spec_from_loader(_PACKAGE, loader=None, is_package=True)
         sys.modules[_PACKAGE] = package
     elif Path(package.__path__[0]).resolve() != directory:
-        raise RuntimeError("다른 저장 폴더 확장이 실행 중입니다. 앱을 다시 시작하세요.")
-    return importlib.import_module(f"{_PACKAGE}.{name}")
+        raise RuntimeError("다른 위치의 같은 확장이 실행 중이어서 적용을 중단했습니다.")
+    path = directory / (name + ".py")
+    source = path.read_bytes()
+    digest = hashlib.sha256(source).hexdigest()
+    fullname = _PACKAGE + "." + name
+    previous = sys.modules.get(fullname)
+    if previous is not None and getattr(previous, "__naia_source_digest", None) == digest:
+        return previous
+    spec = importlib.util.spec_from_file_location(fullname, path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[fullname] = module
+    try:
+        # Execute the verified source, without stale timestamp-based bytecode.
+        exec(compile(source, str(path), "exec"), module.__dict__)
+    except BaseException:
+        if previous is None:
+            sys.modules.pop(fullname, None)
+        else:
+            sys.modules[fullname] = previous
+        raise
+    module.__naia_source_digest = digest
+    return module
+
+
+def _retire_previous():
+    """Recover controllers even after the host replaced the entry module.
+
+    Only our package's serving wrappers and our exact installation directory
+    are considered. Closing preserves stored credentials and saved settings.
+    """
+    directory = Path(__file__).resolve().parent
+    package = sys.modules.get(_PACKAGE)
+    if package is not None and Path(package.__path__[0]).resolve() != directory:
+        raise RuntimeError("다른 위치의 같은 확장이 실행 중입니다.")
+    controllers = [_controller, getattr(package, "_controller", None)]
+    shell = sys.modules.get("app.backend.server.web_shell_routes")
+    pending = [getattr(shell, name, None) for name in ("_web_file", "_web_asset")]
+    seen = set()
+    while pending and len(seen) < 128:
+        fn = pending.pop()
+        if not isinstance(fn, types.FunctionType) or id(fn) in seen:
+            continue
+        seen.add(id(fn))
+        values = {}
+        for name, cell in zip(fn.__code__.co_freevars, fn.__closure__ or ()):
+            try:
+                values[name] = cell.cell_contents
+            except ValueError:
+                pass
+        pending.extend(values.get(name) for name in ("previous_file", "previous_asset"))
+        if fn.__module__ == _PACKAGE + ".naia_storage_ui":
+            server = values.get("server")
+            if type(server).__module__ == _PACKAGE + ".naia_storage_ui":
+                controllers.append(getattr(server, "controller", None))
+    closed = set()
+    for controller in controllers:
+        if controller is None or id(controller) in closed:
+            continue
+        context = getattr(controller, "ctx", None)
+        if context is None or Path(context.ext_dir).resolve() != directory:
+            raise RuntimeError("이전 확장의 설치 경로가 달라 안전하게 중지하지 못했습니다.")
+        controller.close()
+        closed.add(id(controller))
+    if package is not None:
+        package._controller = None
 
 
 class Controller:
@@ -63,9 +127,8 @@ class Controller:
 
 def register(ctx):
     global _controller
-    if _controller:
-        _controller.close()
-        _controller = None
+    _retire_previous()
+    _controller = None
     service = _module("naia_storage_service").StorageDirectoryService(ctx._app_context)
     controller = Controller(ctx, service)
     try:
@@ -81,5 +144,6 @@ def register(ctx):
         controller.close()
         raise
     _controller = controller
+    sys.modules[_PACKAGE]._controller = controller
     atexit.register(controller.close)
     ctx.log("저장 폴더 목록 선택이 준비되었습니다. 화면을 새로고침하세요.")
