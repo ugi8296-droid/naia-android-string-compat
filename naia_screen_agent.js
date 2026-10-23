@@ -255,8 +255,14 @@
     observer.observe(doc.body, {subtree: true, childList: true, characterData: true, characterDataOldValue: true, attributes: true, attributeOldValue: true});
     const flush = () => observeChanges(observer.takeRecords());
     const changed = event => { if (event.isTrusted) invalidate(); };
-    for (const name of ['pointerdown', 'keydown', 'input', 'change', 'scroll']) doc.addEventListener(name, changed, true);
-    global.addEventListener('resize', invalidate);
+    // A browser-generated scroll/resize is also isTrusted (scroll anchoring,
+    // WebView viewport updates). It is not proof of a new user action. Keep
+    // the token and recheck exact target identity, bounds, value and overlays
+    // when executing. Real pointer/keyboard input still invalidates globally.
+    for (const name of ['pointerdown', 'keydown']) doc.addEventListener(name, changed, true);
+    const layoutChanged = () => { epoch++; };
+    doc.addEventListener('scroll', layoutChanged, true);
+    global.addEventListener('resize', layoutChanged);
     function snapshot(permissions) {
       if (protectedScreen(doc)) throw error('protected_screen');
       flush();
@@ -379,8 +385,9 @@
     frame.contentWindow.postMessage({type: 'naia-ui-ready'}, panelOrigin);
     global.__naiaScreenAgentDispose = () => {
       disposed = true; current = null; observer.disconnect();
-      global.removeEventListener('message', receive); global.removeEventListener('resize', invalidate);
-      for (const name of ['pointerdown', 'keydown', 'input', 'change', 'scroll']) doc.removeEventListener(name, changed, true);
+      global.removeEventListener('message', receive); global.removeEventListener('resize', layoutChanged);
+      for (const name of ['pointerdown', 'keydown']) doc.removeEventListener(name, changed, true);
+      doc.removeEventListener('scroll', layoutChanged, true);
     };
   }
   global.__naiaInstallScreenAgent = install;

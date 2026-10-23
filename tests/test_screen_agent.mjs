@@ -267,3 +267,16 @@ test('branded Android shell view switch uses exact observed title and reports ag
   const result = await f.call('naia_ui_action', {snapshot_id:screen.snapshot_id,target:screen.controls[0].target,action:'click'});
   assert.equal(result.is_error, false);assert.equal(button.clicks,1);
 });
+
+
+test('trusted automatic scroll and resize keep stable Quick target; moved target is rejected', async () => {
+  for (const moved of [false,true]) {
+    const f=fixture(), button=f.add('BUTTON',{onclick:'toggleTagFilter()'});
+    const {result:screen}=await f.call('naia_get_screen');
+    f.listeners.get('doc:scroll')({isTrusted:true});f.listeners.get('resize')({isTrusted:true});
+    if(moved)button.rect={...button.rect,x:20,left:20,right:120};
+    const result=await f.call('naia_ui_action',{snapshot_id:screen.snapshot_id,target:screen.controls[0].target,action:'click'});
+    if(moved){assert.equal(result.result.error.code,'stale_target');assert.equal(button.clicks,0);}
+    else {assert.equal(result.is_error,false);assert.equal(button.clicks,1);}
+  }
+});
