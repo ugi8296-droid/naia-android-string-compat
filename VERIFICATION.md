@@ -2,11 +2,11 @@
 
 The transport iframe is mounted outside the settings dialog. A separate lazy-loaded settings iframe cannot claim screen commands. Foreground parent messages drive polling and repeat readiness handshakes even when iframe timers are suspended; pageshow and visibility restoration wake the transport. No automatic page reload or credential/permission change occurs.
 
-State results report runtime_version, ready and busy; screen results report agent_version. The exact observed branded view-switch title is recognized while restricted handlers remain blocked.
+State results report runtime_version, ready and busy; screen results report agent_version. The exact observed branded view-switch title is recognized while restricted handlers remain blocked. Automatic trusted scroll/resize events no longer discard a snapshot; real pointer/keyboard input still does, and changed target bounds/values/handlers/overlays are revalidated.
 
-Passed: 85 Python tests (including executing the packaged parent/panel scripts with iframe timers suspended), 18 screen JavaScript tests. Device rendering/background behavior remains unverified. A page refresh after updating is still required to replace old injected code and its old local endpoint. This fixes a structural failure mode; it does not establish that every observed tablet failure had that cause.
+Passed: 85 Python tests (including executing the packaged parent/panel scripts with iframe timers suspended), 19 screen JavaScript tests. Device rendering/background behavior remains unverified. A page refresh after updating is still required to replace old injected code and its old local endpoint. This fixes a structural failure mode; it does not establish that every observed tablet failure had that cause.
 
-Payload SHA-256: `796e02a7226209580bab2f73716e604cef35da5ff13b0312a8268076d63a0609`.
+Payload SHA-256: `db75ae1d50c3641bfd787385f58a738defe2b7fbc913b3e178dd0a1c7edb9d98`.
 
 ---
 
