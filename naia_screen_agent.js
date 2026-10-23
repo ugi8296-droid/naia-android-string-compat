@@ -32,6 +32,7 @@
     'toggleMobileHistoryRail()', 'toggleFnMenu(event)', 'dismissFnQuick(event)', 'openFnQuick()',
     'openFnPreset()', 'openFnSequence()', 'openFnISequence()', 'openFnV5Scene()',
     'closeModule()', 'toggleTagFilter()', 'closeTagFilter()', 'refreshMetadataViewer()',
+    'openViewerPopup()', 'closeChunkPanel()', 'toggleTagFilterPresets()',
   ]).map(normalizeHandler));
   const EDIT_HANDLERS = new Set(([
     'toggleTransparentBackground()', 'toggleSeedResLock()',
@@ -83,6 +84,20 @@
     if (el.hasAttribute('data-character-viewer-tab') && el.closest('#rightTabCharacters')) return {actions: ['click'], edit: false};
     if (el.hasAttribute('data-metadata-detail-tab') && ['params', 'raw'].includes(attr(el, 'data-metadata-detail-tab'))) return {actions: ['click'], edit: false};
     const identifiers = [id, handler, attr(el, 'data-studio-action'), attr(el, 'data-action'), attr(el, 'data-artist-batch-mode')].join(' ');
+    // Presentation-only controls may be added by the Android shell. Never
+    // infer arbitrary button safety from the absence of a blocked word.
+    if (!BLOCK_NAMES.test(identifiers) && !el.closest('form') && el.tagName === 'BUTTON') {
+      const text = norm(el.textContent, 100).replace(/[▾▴▼▲⛶]/g, '').trim();
+      const viewLabels = /^(?:간편 화면|전체 화면|전체화면|전체 화면으로 전환|간편 화면으로 전환|크게 보기|접기|펼치기|Full screen|Fullscreen|Simple view)$/i;
+      if (viewLabels.test(text)) return {actions: ['click'], edit: false};
+      // Standard tab/disclosure navigation must identify its local destination.
+      const destination = attr(el, 'aria-controls');
+      const panel = destination && global.document.getElementById?.(destination);
+      if (panel && !sensitive(panel) && !panel.querySelector?.(SENSITIVE_ROOTS + ',' + SECRET_FIELDS) &&
+          (attr(el, 'role') === 'tab' || ['true', 'false'].includes(attr(el, 'aria-expanded')))) {
+        return {actions: ['click'], edit: false};
+      }
+    }
     return {actions: [], reason: BLOCK_NAMES.test(identifiers) ? 'restricted_action' : 'unsupported_control'};
   }
   function optionAllowed(el, option) {
@@ -220,9 +235,25 @@
       const describe = nodes => Array.from(nodes, node => node.outerHTML || node.textContent || '').join('');
       return describe(record.addedNodes) !== describe(record.removedNodes);
     };
-    const observer = new global.MutationObserver(records => { if (records.some(relevant)) invalidate(); });
+    function observeChanges(records) {
+      for (const record of records) {
+        if (!relevant(record)) continue;
+        epoch++; // Captures still require a stable whole screen.
+        if (!current) continue;
+        const host = record.target.nodeType === 1 ? record.target : record.target.parentElement;
+        for (const entry of current.entries.values()) {
+          // Background counters, thumbnail loads and unrelated panels must not
+          // expire a stable Quick/menu button. Changes to that exact control,
+          // its contents, or ancestor attributes still invalidate that target.
+          if (host && [entry.el, entry.source].some(node =>
+              node === host || node.contains(host) ||
+              (record.type === 'attributes' && host.contains(node)))) entry.dirty = true;
+        }
+      }
+    }
+    const observer = new global.MutationObserver(observeChanges);
     observer.observe(doc.body, {subtree: true, childList: true, characterData: true, characterDataOldValue: true, attributes: true, attributeOldValue: true});
-    const flush = () => { if (observer.takeRecords().some(relevant)) invalidate(); };
+    const flush = () => observeChanges(observer.takeRecords());
     const changed = event => { if (event.isTrusted) invalidate(); };
     for (const name of ['pointerdown', 'keydown', 'input', 'change', 'scroll']) doc.addEventListener(name, changed, true);
     global.addEventListener('resize', invalidate);
@@ -294,7 +325,7 @@
       if (permissions.control !== true) throw error('control_permission_required');
       if (protectedScreen(doc)) throw error('protected_screen');
       flush();
-      if (!current || typeof args.snapshot_id !== 'string' || args.snapshot_id !== current.id || current.epoch !== epoch) throw error('stale_snapshot');
+      if (!current || typeof args.snapshot_id !== 'string' || args.snapshot_id !== current.id) throw error('stale_snapshot');
       const entry = current.entries.get(args.target), action = args.action;
       // Consume the token even when validation fails; callers must refresh.
       current = null;
@@ -305,7 +336,7 @@
         if (!Number.isInteger(amount) || amount < 1 || amount > 2000) throw error('invalid_amount');
         global.scrollBy({top: args.direction === 'down' ? amount : args.direction === 'up' ? -amount : 0, left: args.direction === 'right' ? amount : args.direction === 'left' ? -amount : 0, behavior: 'instant'});
       } else {
-        if (!entry || !visible(entry.el) || !entry.source.isConnected || signature(entry.el) !== entry.signature || signature(entry.source) !== entry.sourceSignature || (!entry.scrolling && sourceElement(entry.el) !== entry.source)) throw error('stale_target');
+        if (!entry || entry.dirty || !visible(entry.el) || !entry.source.isConnected || signature(entry.el) !== entry.signature || signature(entry.source) !== entry.sourceSignature || (!entry.scrolling && sourceElement(entry.el) !== entry.source)) throw error('stale_target');
         if (!hittable(entry.el)) throw error('covered_control');
         const el = entry.source, p = entry.scrolling ? {actions: scrollable(el) ? ['scroll'] : [], edit: false} : policy(el);
         if (disabled(el) || !p.actions.includes(action)) throw error(p.reason || 'action_not_allowed');

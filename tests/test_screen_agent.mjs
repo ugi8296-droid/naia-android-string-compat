@@ -59,7 +59,8 @@ function fixture() {
     querySelectorAll: selector => elements.filter(el => el.matches(selector)),
     createTreeWalker: () => ({nextNode: () => false}),
     elementFromPoint: (x, y) => doc.cover || elements.findLast(el => !el.hidden && !el.closest('[aria-hidden="true"]') && x >= el.rect.left && x <= el.rect.right && y >= el.rect.top && y <= el.rect.bottom) || body,
-    addEventListener() {}, removeEventListener() {},
+    getElementById: id => elements.find(el => el.id === id),
+    addEventListener: (name, handler) => listeners.set('doc:' + name, handler), removeEventListener() {},
   };
   const window = {
     document: doc, innerWidth: 1000, innerHeight: 800, scrollX: 0, scrollY: 0, crypto: webcrypto,
@@ -206,4 +207,54 @@ test('capture bounds canvas at1600, ignores sensitive fields/iframes, releases c
   assert.equal(options.ignoreElements(new Element('IFRAME')), true);
   assert.equal(options.ignoreElements(new Input('INPUT', {type: 'password'})), true);
   assert.equal(canvas.width, 0); assert.equal(canvas.height, 0);
+});
+
+
+test('unrelated live DOM updates preserve Quick snapshot through queued and delivered mutations', async () => {
+  const f = fixture(), quick = f.add('BUTTON', {id: 'tagFilterToggle', onclick: 'toggleTagFilter()'});
+  const counter = f.add('SPAN', {id: 'liveCounter'});
+  const {result: screen} = await f.call('naia_get_screen');
+  counter.attrs.title = 'updated';
+  const record = {type: 'attributes', target: counter, attributeName: 'title', oldValue: null};
+  f.observers[0].callback([record]);
+  f.observers[0].records.push(record);
+  const response = await f.call('naia_ui_action', {snapshot_id: screen.snapshot_id, target: screen.controls[0].target, action: 'click'});
+  assert.equal(response.is_error, false); assert.equal(quick.clicks, 1);
+});
+
+test('actual target, ancestor and trusted user changes still reject saved clicks', async () => {
+  for (const mode of ['ancestor', 'handler', 'user']) {
+    const f = fixture(), parent = f.add('DIV'), quick = f.add('BUTTON', {onclick: 'toggleTagFilter()'}, parent);
+    const {result: screen} = await f.call('naia_get_screen');
+    if (mode === 'ancestor') { parent.attrs.class = 'new-context'; f.observers[0].records.push({type:'attributes', target:parent, attributeName:'class', oldValue:null}); }
+    if (mode === 'handler') quick.attrs.onclick = 'generateAction()';
+    if (mode === 'user') f.listeners.get('doc:pointerdown')({isTrusted: true});
+    const response = await f.call('naia_ui_action', {snapshot_id:screen.snapshot_id, target:screen.controls[0].target, action:'click'});
+    assert.match(response.result.error.code, /^stale_/); assert.equal(quick.clicks, 0);
+  }
+});
+
+test('Android view switch works without edit permission; unsafe lookalikes stay blocked', async () => {
+  const f = fixture(), button = f.add('BUTTON', {label:'간편 화면 ▾', title:'간편 화면 사용 중. 전체 기능을 보려면 전체 화면으로 전환'});
+  const {result: screen} = await f.call('naia_get_screen', {}, {...f.permissions, edit:false});
+  const response = await f.call('naia_ui_action', {snapshot_id:screen.snapshot_id, target:screen.controls[0].target, action:'click'}, {...f.permissions, edit:false});
+  assert.equal(response.is_error, false); assert.equal(button.clicks, 1);
+  for (const onclick of ['generateAction()', 'deleteFrame()', 'openSaveDirectoryPanel()', 'openApiPopup()']) {
+    assert.deepEqual(f.policy(f.add('BUTTON', {label:'전체 화면', onclick})).actions.length, 0);
+  }
+  assert.equal(f.policy(f.add('BUTTON', {label:'Unknown action'})).actions.length, 0);
+});
+
+test('standard navigation destinations allow tabs but never settings', () => {
+  const f = fixture(); f.add('DIV', {id:'galleryPanel'}); f.add('DIV', {id:'settingsRoot'});
+  assert.equal(f.policy(f.add('BUTTON', {role:'tab', 'aria-controls':'galleryPanel'})).actions[0], 'click');
+  assert.equal(f.policy(f.add('BUTTON', {role:'tab', 'aria-controls':'settingsRoot'})).actions.length, 0);
+});
+
+test('new protected screen blocks action even when original button is unchanged', async () => {
+  const f = fixture(); f.add('BUTTON', {onclick:'toggleTagFilter()'});
+  const {result: screen} = await f.call('naia_get_screen');
+  f.add('DIV', {id:'settingsRoot'});
+  const response = await f.call('naia_ui_action', {snapshot_id:screen.snapshot_id, target:screen.controls[0].target, action:'click'});
+  assert.equal(response.result.error.code, 'protected_screen');
 });

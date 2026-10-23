@@ -1,4 +1,4 @@
-NAIA Android Tools 0.2.1
+NAIA Android Tools 0.2.2
 For NAIA 2.0 v2.0.48 by DNT-LAB.
 Upstream: https://github.com/DNT-LAB/NAIA2.0
 Audited upstream: 6e97c7f4f37e495ad21657ed29d28dd9993a808e
